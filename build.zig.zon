@@ -1,0 +1,11 @@
+.{
+    .name = .mterm,
+    .version = "0.1.0",
+    .fingerprint = 0x23cb7c7021ec7e66,
+    .minimum_zig_version = "0.14.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
