@@ -47,14 +47,14 @@ SSH sessions are **hidden from SESSIONS** and shown under their host in **REMOTE
 
 ### Creating (+ New Session)
 ```
-local: tmux new-session -d -s ssh_HOST-N ssh HOST -t "tmux new-session \; set-option destroy-unattached on"
+local: tmux new-session -d -s ssh_HOST-N ssh HOST -t "tmux new-session \; set-option destroy-unattached on \; set-option mouse on"
 ```
 - `destroy-unattached on` ensures the remote session auto-destroys when SSH disconnects
 - From empty state: uses `startPtyAttach()` (NOT `startPty()` which creates an unwanted local session)
 
 ### Attaching (click remote session)
 ```
-local: tmux new-session -d -s ssh_HOST/SESSION ssh HOST -t "tmux attach-session -t SESSION"
+local: tmux new-session -d -s ssh_HOST/SESSION ssh HOST -t "tmux attach-session -t SESSION \; set-option mouse on"
 ```
 
 ### Killing (× button)
@@ -76,6 +76,71 @@ local: tmux new-session -d -s ssh_HOST/SESSION ssh HOST -t "tmux attach-session 
 2. Remove from `~/.mterm/ssh_hosts`
 3. Sync state
 
+## Mouse Forwarding
+
+Mouse clicks must reach the **remote** tmux for pane selection, scrolling, etc. The chain is:
+
+```
+mterm (X10 mouse) → local tmux → SSH → remote tmux
+```
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant mterm as mterm (terminal emulator)
+    participant LTmux as Local tmux (mouse on)
+    participant SSH
+    participant RTmux as Remote tmux (mouse on)
+
+    Note over RTmux: On session create, remote tmux<br/>gets "set-option mouse on"
+    RTmux->>SSH: ESC[?1000h (request mouse tracking)
+    SSH->>LTmux: forwarded to pane output
+    LTmux->>LTmux: Records: pane app wants mouse events
+
+    User->>mterm: Click at (col, row)
+    mterm->>LTmux: ESC [ M btn col row (X10 format)
+    LTmux->>LTmux: Pane app requested mouse? YES
+    LTmux->>SSH: Forward mouse event to pane
+    SSH->>RTmux: Mouse event arrives
+    RTmux->>RTmux: Select pane at (col, row)
+```
+
+**Critical**: The remote tmux MUST have `mouse on`, otherwise it never sends `ESC[?1000h` to the local tmux pane, and the local tmux consumes mouse clicks for its own (single-pane, no-op) pane selection instead of forwarding. Both `bridge_create_ssh_shell` and `createSshSession` include `set-option mouse on` in the remote tmux command for this reason.
+
+**Why not `mouse off` on local?** Setting `mouse off` on the local SSH session doesn't help — local tmux with `mouse off` ignores mouse escape sequences entirely rather than forwarding them to the pane.
+
+## Command Forwarding (Palette → Remote)
+
+When the active session is an SSH session, Cmd+K palette commands (split pane, new window, etc.) must target the **remote** tmux, not the local one.
+
+```mermaid
+flowchart TD
+    A[User: Cmd+K → Split Pane Right] --> B{Active session is SSH?}
+    B -- No --> C[tmux split-window -h<br/>on local tmux]
+    B -- Yes --> D[Extract host from session name<br/>ssh_HOST/SESSION or ssh_HOST-N]
+    D --> E[ssh HOST 'tmux split-window -h -t SESSION']
+    E --> F[Remote tmux splits the pane]
+```
+
+`runTmuxCmd()` checks if the active session starts with `ssh_`. If so, calls `runRemoteTmuxCmd()` which:
+1. Parses host from session name (`ssh_` prefix, `/` or `-N` suffix)
+2. Builds remote tmux command string (with `-t SESSION` when session name is known)
+3. Runs via `ssh -o ConnectTimeout=5 HOST "tmux ..."
+
+All 8 palette commands are forwarded: split-h, split-v, new-window, next/prev-window, next-pane, kill-pane, resize/zoom.
+
+## Session Filtering (Probe vs Active)
+
+Probe results show ALL remote tmux sessions, but sessions already attached via local SSH should be hidden to avoid duplicates.
+
+```
+Probe returns: [6, 7, 8]
+Active local:  [ssh_host/8, ssh_host/6]
+Sidebar shows: [ssh_host/8, ssh_host/6, 7]  ← only "7" from probe
+```
+
+`isRemoteSessionAttached(host_idx, sess_idx)` checks if any local session matches `ssh_HOST/SESSION`. The `bridge_get_ssh_session_count/name/name_len` functions filter these out, and `bridge_select_ssh_session` / `bridge_kill_remote_session` use `mapFilteredSshSession()` to map filtered indices back to raw probe indices.
+
 ## FFI Functions
 
 | Bridge function | Purpose |
@@ -88,6 +153,6 @@ local: tmux new-session -d -s ssh_HOST/SESSION ssh HOST -t "tmux attach-session 
 | `bridge_load_ssh_suggestions()` | Load `~/.ssh/config` hosts for Add Host palette |
 | `bridge_get_ssh_suggestion_count/name/name_len()` | Read suggestion list |
 | `bridge_get_ssh_host_count/name/name_len/status/expanded()` | Read host list |
-| `bridge_get_ssh_session_count/name/name_len()` | Read probe results |
+| `bridge_get_ssh_session_count/name/name_len()` | Read probe results (filtered — excludes attached) |
 | `bridge_get_ssh_active_count/session_idx/display/display_len()` | Read active local SSH sessions |
 | `bridge_is_ssh_session(idx)` | Check if session has `ssh_` prefix |
