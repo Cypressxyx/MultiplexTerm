@@ -200,10 +200,20 @@ sequenceDiagram
 - Themes: Vercel Dark (default), Gruvbox Dark/Light, Catppuccin Mocha/Latte, Kanagawa/Light, Nord, Dracula, One Dark/Light, Solarized Dark/Light, Tokyo Night/Light, Rosé Pine/Dawn, Everforest Dark/Light, Monokai Pro, Ayu Dark/Light, Nightfox, Synthwave '84, GitHub Dark
 - `ThemeDef` struct: name, bg, fg, sidebar, border, accent, green (all `uint32_t` hex)
 - `applyTheme(idx)` computes derived colors (textDim, textMuted, selectedBg, hoverBg) via `blendHex()`
-- `g_currentTheme` tracks active theme index; checkmark shown in picker
-- Theme picker supports keyboard (up/down/enter/esc), mouse click, hover, and scroll wheel
+- `g_currentTheme` tracks active theme index; `g_savedTheme` saves the pre-preview theme for revert
+- **Live preview**: navigating themes (keyboard or mouse hover) calls `applyTheme()` immediately; Escape/Back reverts to `g_savedTheme`
 - `paletteMode`: 0=commands, 1=themes — controls which view `drawPalette` renders
 - Fonts: SF Mono (terminal), SF Pro (UI), Menlo (italic/bold-italic)
+
+### Command Palette (Cmd+K)
+- Floating card over terminal — no full-screen overlay (dark overlays make dark themes invisible)
+- Card uses drop shadow (`NSShadow`) for contrast against terminal content
+- All palette colors use theme globals (`g_sidebarBg`, `g_border`, `g_selectedBg`, `g_text`, etc.) — never hardcoded hex
+- Two modes: commands (`paletteMode=0`, 9 items) and theme picker (`paletteMode=1`, 25 scrollable items)
+- Commands mode: up/down navigate, Enter executes (or enters theme submenu for last item), Escape closes
+- Theme mode: up/down navigate with live preview, Enter confirms, Escape/Backspace reverts and goes back
+- Mouse: click to select, hover to highlight (and preview in theme mode), scroll wheel in theme picker
+- Cmd+K while in theme preview reverts to saved theme before closing
 
 ## Testing
 
@@ -236,3 +246,6 @@ cat /tmp/mterm.log
 - **Display name early returns**: `syncState()` must always call `updateDisplayNames()` — don't return early before it
 - **Cells bounds**: `drawTerminal` must bounds-check cell index against `bridge_get_cell_count()` to prevent crashes during resize
 - **Option key**: Option+key sends ESC+char (Meta), not the macOS Unicode glyph — terminal apps expect Meta behavior
+- **Palette overlay**: Do NOT use a full-screen semi-transparent overlay behind the command palette — on dark themes it makes the terminal content invisible. Use a drop shadow on the card instead.
+- **Palette colors**: All palette UI colors must use theme globals (`g_sidebarBg`, `g_border`, etc.), never hardcoded hex — otherwise the palette becomes invisible on certain themes
+- **Theme preview revert**: When entering theme picker, save `g_currentTheme` to `g_savedTheme`. ALL exit paths (Escape, Backspace, Back click, click outside, Cmd+K toggle) must call `applyTheme(g_savedTheme)` to revert. Only Enter/click-on-theme confirms without revert.

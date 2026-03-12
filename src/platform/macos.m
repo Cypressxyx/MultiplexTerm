@@ -51,6 +51,9 @@ static const CGFloat kTermPadLeft     = 4.0;
 static const CGFloat kTitlebarInset   = 28.0; // space for traffic light buttons
 
 // === Theme system ===
+// Each theme defines 6 base colors; derived colors (textDim, selectedBg, etc.) are
+// computed by blendHex() in applyTheme(). All UI drawing must use the g_* color
+// globals — never hardcode hex values — so that themes work correctly everywhere.
 typedef struct {
     const char* name;
     uint32_t bg;
@@ -90,8 +93,8 @@ static const ThemeDef kThemes[] = {
     { "GitHub Dark",      0x0D1117, 0xC9D1D9, 0x010409, 0x21262D, 0x58A6FF, 0x3FB950 },
 };
 
-static int g_currentTheme = 0;
-static int g_savedTheme = 0; // saved before preview
+static int g_currentTheme = 0;  // Index into kThemes[] for the confirmed theme
+static int g_savedTheme = 0;   // Snapshot before entering theme picker, for revert on cancel
 static NSColor* g_bg;
 static NSColor* g_sidebarBg;
 static NSColor* g_border;
@@ -175,11 +178,13 @@ static NSColor* colorFromU32(uint32_t c, NSColor* def) {
 @property (nonatomic) int selEndCol;
 @property (nonatomic) int selEndRow;
 @property (nonatomic) BOOL isDragging;
-// Command palette
+// Command palette (Cmd+K)
+// paletteMode: 0 = commands list, 1 = theme picker (with live preview)
+// When entering theme mode, g_savedTheme is set so we can revert on cancel.
 @property (nonatomic) BOOL paletteVisible;
-@property (nonatomic) NSInteger paletteSelection;
-@property (nonatomic) NSInteger paletteMode; // 0 = commands, 1 = themes
-@property (nonatomic) NSInteger themeScroll; // scroll offset for theme list
+@property (nonatomic) NSInteger paletteSelection;  // selected row (command idx or theme idx)
+@property (nonatomic) NSInteger paletteMode;        // 0 = commands, 1 = themes
+@property (nonatomic) NSInteger themeScroll;         // scroll offset for theme list (25 themes, 12 visible)
 @end
 
 static const int kPaletteItemCount = 9; // 8 commands + 1 theme
@@ -300,30 +305,17 @@ static NSString* const kPaletteHints[] = {
 }
 
 // === Drawing ===
+// Draw order: bg → terminal cells → cursor → sidebar → palette card.
+// Palette floats on top with drop shadow (no overlay — see pitfalls in AGENTS.md).
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
     @autoreleasepool {
-        // Full background
         [g_bg setFill];
         NSRectFill(self.bounds);
-
-        // Terminal content
         [self drawTerminal];
-
-        // Cursor
-        if (bridge_get_cursor_visible() && self.cursorBlink) {
-            [self drawCursor];
-        }
-
-        // Sidebar (drawn on top of terminal)
-        if (bridge_is_sidebar_visible()) {
-            [self drawSidebar];
-        }
-
-        // Command palette overlay
-        if (self.paletteVisible) {
-            [self drawPalette];
-        }
+        if (bridge_get_cursor_visible() && self.cursorBlink) [self drawCursor];
+        if (bridge_is_sidebar_visible()) [self drawSidebar];
+        if (self.paletteVisible) [self drawPalette];
     }
 }
 
@@ -440,7 +432,8 @@ static NSString* const kPaletteHints[] = {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
 
-    // No full-screen overlay — card has its own shadow/border for contrast
+    // IMPORTANT: No full-screen overlay here. A semi-transparent overlay makes
+    // terminal content invisible on dark themes. The card uses a drop shadow instead.
 
     if (self.paletteMode == 1) {
         [self drawThemePicker];
@@ -1173,10 +1166,12 @@ static NSString* const kPaletteHints[] = {
 
 // === Keyboard ===
 - (void)keyDown:(NSEvent*)event {
-    // Command palette navigation
+    // Command palette navigation — swallows all keys while visible.
+    // Theme mode uses live preview: up/down calls applyTheme() immediately,
+    // Enter confirms (theme already applied), Escape reverts to g_savedTheme.
     if (self.paletteVisible) {
         if (self.paletteMode == 1) {
-            // Theme picker mode
+            // Theme picker: navigate + live preview
             switch (event.keyCode) {
                 case 126: { // Up
                     NSInteger sel = self.paletteSelection;
