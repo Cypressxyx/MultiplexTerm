@@ -45,10 +45,10 @@ pub const TmuxManager = struct {
             sessions.append(self.allocator, session) catch continue;
         }
 
-        // Sort by creation time (oldest first) so new sessions appear at the bottom
+        // Sort by creation time (newest first) so new sessions appear at the top
         std.mem.sortUnstable(state_mod.Session, sessions.items, {}, struct {
             fn lessThan(_: void, a: state_mod.Session, b: state_mod.Session) bool {
-                return a.created < b.created;
+                return a.created > b.created;
             }
         }.lessThan);
 
