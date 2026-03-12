@@ -76,18 +76,34 @@ fn startPty(cols: u16, rows: u16) void {
     g_engine = TerminalEngine.init(g_allocator, cols, rows) catch return;
 
     // Use current directory name as initial session name
+    // When launched from Finder, cwd is "/" — fall back to HOME or "mterm"
     var cwd_buf: [1024]u8 = undefined;
     const cwd = std.posix.getcwd(&cwd_buf) catch "/tmp";
-    const dir_name = std.fs.path.basename(cwd);
+    var dir_name = std.fs.path.basename(cwd);
+    if (dir_name.len == 0 or std.mem.eql(u8, dir_name, "/")) {
+        // cwd is root — try HOME instead
+        const home = std.posix.getenv("HOME") orelse "/tmp";
+        dir_name = std.fs.path.basename(home);
+        if (dir_name.len == 0 or std.mem.eql(u8, dir_name, "/")) {
+            dir_name = "mterm";
+        }
+        // Also cd to HOME so tmux sessions start there
+        std.posix.chdir(home) catch {};
+    }
+    logFmt("startPty: cwd={s}, session={s}, cols={d}, rows={d}", .{ cwd, dir_name, cols, rows });
     const nlen = @min(dir_name.len, g_session_name_buf.len - 1);
     @memcpy(g_session_name_buf[0..nlen], dir_name[0..nlen]);
     g_session_name_buf[nlen] = 0;
 
-    var pty = Pty.open() catch return;
+    var pty = Pty.open() catch {
+        logMsg("startPty: failed to open PTY");
+        return;
+    };
     pty.setSize(cols, rows);
     const session_name: [*:0]const u8 = &g_session_name_buf;
     const argv = [_:null]?[*:0]const u8{ "tmux", "new-session", "-A", "-s", session_name, "-e", "CLAUDECODE=" };
     pty.spawn(&argv) catch {
+        logMsg("startPty: failed to spawn tmux");
         pty.close();
         return;
     };
