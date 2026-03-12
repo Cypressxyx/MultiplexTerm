@@ -993,7 +993,8 @@ static NSString* const kPaletteHints[] = {
         CGFloat centerX = sbw + (w - sbw) / 2;
 
         uint16_t rpCount = bridge_get_recent_project_count();
-        CGFloat totalH = 40 + (rpCount > 0 ? 30 + rpCount * 32 : 0);
+        CGFloat rpRows = rpCount > 0 ? rpCount : 1;
+        CGFloat totalH = 40 + 30 + 24 + rpRows * 32;
         CGFloat startY = (h - totalH) / 2;
 
         CGFloat btnW = 180;
@@ -1274,7 +1275,8 @@ static NSString* const kPaletteHints[] = {
         CGFloat centerX = sbw + (w - sbw) / 2;
         uint16_t rpCount = bridge_get_recent_project_count();
         if (rpCount > 0) {
-            CGFloat totalH = 40 + 30 + rpCount * 32;
+            CGFloat rpRows = rpCount > 0 ? rpCount : 1;
+            CGFloat totalH = 40 + 30 + 24 + rpRows * 32;
             CGFloat startY = (h - totalH) / 2;
             CGFloat rpRowW = 240;
             CGFloat rpRowH = 32;
