@@ -375,6 +375,10 @@ static NSString* const kPaletteHints[] = {
     CGFloat h = self.bounds.size.height;
     CGFloat sw = kSidebarWidth;
 
+    // Truncating paragraph style for sidebar text
+    NSMutableParagraphStyle* truncStyle = [[NSMutableParagraphStyle alloc] init];
+    truncStyle.lineBreakMode = NSLineBreakByTruncatingTail;
+
     // Sidebar background
     [g_sidebarBg setFill];
     NSRectFill(NSMakeRect(0, 0, sw, h));
@@ -444,8 +448,9 @@ static NSString* const kPaletteHints[] = {
         NSDictionary* nameAttrs = @{
             NSFontAttributeName: sel ? self.uiFontBold : self.uiFont,
             NSForegroundColorAttributeName: sel ? g_text : g_textDim,
+            NSParagraphStyleAttributeName: truncStyle,
         };
-        [name drawAtPoint:NSMakePoint(textX, textY) withAttributes:nameAttrs];
+        [name drawInRect:NSMakeRect(textX, textY, sw - 28 - textX, kSessionRowH) withAttributes:nameAttrs];
 
         // Close "×" button (visible on hover or selected)
         if (sel || self.hoveredSession == i) {
@@ -547,8 +552,10 @@ static NSString* const kPaletteHints[] = {
             NSDictionary* hostNameAttrs = @{
                 NSFontAttributeName: self.uiFont,
                 NSForegroundColorAttributeName: status == 2 ? g_text : g_textDim,
+                NSParagraphStyleAttributeName: truncStyle,
             };
-            [hostName drawAtPoint:NSMakePoint(kSidebarPadH + 14, y + (kSessionRowH - 16) / 2) withAttributes:hostNameAttrs];
+            CGFloat hnTextX = kSidebarPadH + 14;
+            [hostName drawInRect:NSMakeRect(hnTextX, y + (kSessionRowH - 16) / 2, sw - 28 - hnTextX, kSessionRowH) withAttributes:hostNameAttrs];
 
             // × remove button on hover
             if (self.hoveredSshHost == hi) {
@@ -598,8 +605,10 @@ static NSString* const kPaletteHints[] = {
                     NSDictionary* activeAttrs = @{
                         NSFontAttributeName: isSel ? self.uiFontBold : self.uiFont,
                         NSForegroundColorAttributeName: isSel ? g_text : g_textDim,
+                        NSParagraphStyleAttributeName: truncStyle,
                     };
-                    [dName drawAtPoint:NSMakePoint(kSidebarPadH + 26, y + (kRecentRowH - 14) / 2) withAttributes:activeAttrs];
+                    CGFloat aTextX = kSidebarPadH + 26;
+                    [dName drawInRect:NSMakeRect(aTextX, y + (kRecentRowH - 14) / 2, sw - 28 - aTextX, kRecentRowH) withAttributes:activeAttrs];
 
                     // × close button on hover or selected
                     if (isSel || self.hoveredSshSession == encodedActive) {
@@ -632,9 +641,11 @@ static NSString* const kPaletteHints[] = {
                     NSDictionary* sessAttrs = @{
                         NSFontAttributeName: self.uiFont,
                         NSForegroundColorAttributeName: g_textMuted,
+                        NSParagraphStyleAttributeName: truncStyle,
                     };
                     // Indented under host — dimmer since not yet connected
-                    [sessName drawAtPoint:NSMakePoint(kSidebarPadH + 26, y + (kRecentRowH - 14) / 2) withAttributes:sessAttrs];
+                    CGFloat sTextX = kSidebarPadH + 26;
+                    [sessName drawInRect:NSMakeRect(sTextX, y + (kRecentRowH - 14) / 2, sw - 28 - sTextX, kRecentRowH) withAttributes:sessAttrs];
 
                     // × close button on hover
                     if (self.hoveredSshSession == encodedSess) {
@@ -713,10 +724,11 @@ static NSString* const kPaletteHints[] = {
             NSDictionary* rpAttrs = @{
                 NSFontAttributeName: self.uiFont,
                 NSForegroundColorAttributeName: g_textDim,
+                NSParagraphStyleAttributeName: truncStyle,
             };
             CGFloat rpTextX = kSidebarPadH + 14;
             CGFloat rpTextY = y + (kRecentRowH - 14) / 2;
-            [dName drawAtPoint:NSMakePoint(rpTextX, rpTextY) withAttributes:rpAttrs];
+            [dName drawInRect:NSMakeRect(rpTextX, rpTextY, sw - 28 - rpTextX, kRecentRowH) withAttributes:rpAttrs];
 
             // Close × on hover
             if (self.hoveredRecentProject == i) {
@@ -1171,6 +1183,9 @@ static NSString* const kPaletteHints[] = {
     CGFloat textY = btnY + (btnH - textSize.height) / 2;
     [label drawAtPoint:NSMakePoint(textX, textY) withAttributes:attrs];
 
+    NSMutableParagraphStyle* truncStyle = [[NSMutableParagraphStyle alloc] init];
+    truncStyle.lineBreakMode = NSLineBreakByTruncatingTail;
+
     NSDictionary* headerAttrs = @{
         NSFontAttributeName: self.uiFontSmall,
         NSForegroundColorAttributeName: g_textMuted,
@@ -1246,8 +1261,9 @@ static NSString* const kPaletteHints[] = {
             NSDictionary* hostNameAttrs = @{
                 NSFontAttributeName: self.uiFont,
                 NSForegroundColorAttributeName: status == 2 ? g_text : g_textDim,
+                NSParagraphStyleAttributeName: truncStyle,
             };
-            [hostName drawAtPoint:NSMakePoint(rowX + 18, sshY + (sshRowH - 16) / 2) withAttributes:hostNameAttrs];
+            [hostName drawInRect:NSMakeRect(rowX + 18, sshY + (sshRowH - 16) / 2, contentW - 40, sshRowH) withAttributes:hostNameAttrs];
 
             // × remove button on hover
             if (self.hoveredSshHost == hi) {
@@ -1294,8 +1310,9 @@ static NSString* const kPaletteHints[] = {
                     NSDictionary* activeAttrs = @{
                         NSFontAttributeName: isSel ? self.uiFontBold : self.uiFont,
                         NSForegroundColorAttributeName: isSel ? g_text : g_textDim,
+                        NSParagraphStyleAttributeName: truncStyle,
                     };
-                    [dName drawAtPoint:NSMakePoint(rowX + 30, sshY + (sshSubRowH - 14) / 2) withAttributes:activeAttrs];
+                    [dName drawInRect:NSMakeRect(rowX + 30, sshY + (sshSubRowH - 14) / 2, contentW - 50, sshSubRowH) withAttributes:activeAttrs];
                     sshY += sshSubRowH;
                 }
 
@@ -1318,8 +1335,9 @@ static NSString* const kPaletteHints[] = {
                     NSDictionary* sessAttrs = @{
                         NSFontAttributeName: self.uiFont,
                         NSForegroundColorAttributeName: g_textMuted,
+                        NSParagraphStyleAttributeName: truncStyle,
                     };
-                    [sessName drawAtPoint:NSMakePoint(rowX + 30, sshY + (sshSubRowH - 14) / 2) withAttributes:sessAttrs];
+                    [sessName drawInRect:NSMakeRect(rowX + 30, sshY + (sshSubRowH - 14) / 2, contentW - 50, sshSubRowH) withAttributes:sessAttrs];
                     sshY += sshSubRowH;
                 }
 
@@ -1405,9 +1423,10 @@ static NSString* const kPaletteHints[] = {
             NSDictionary* rpAttrs = @{
                 NSFontAttributeName: self.uiFont,
                 NSForegroundColorAttributeName: g_textDim,
+                NSParagraphStyleAttributeName: truncStyle,
             };
             NSSize nameSize = [dName sizeWithAttributes:rpAttrs];
-            [dName drawAtPoint:NSMakePoint(rowX2 + 4, rowY + (rpRowH - nameSize.height) / 2) withAttributes:rpAttrs];
+            [dName drawInRect:NSMakeRect(rowX2 + 4, rowY + (rpRowH - nameSize.height) / 2, contentW - 8, rpRowH) withAttributes:rpAttrs];
 
             rpY += rpRowH;
         }
