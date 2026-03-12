@@ -47,6 +47,7 @@ extern uint16_t bridge_get_recent_project_display_len(uint16_t idx);
 extern const uint8_t* bridge_get_recent_project_path(uint16_t idx);
 extern uint16_t bridge_get_recent_project_path_len(uint16_t idx);
 extern void bridge_create_session_in_dir(const uint8_t* path, uint16_t len);
+extern void bridge_remove_recent_project(uint16_t idx);
 
 // === Layout constants ===
 static const CGFloat kSidebarWidth    = 220.0;
@@ -472,6 +473,15 @@ static NSString* const kPaletteHints[] = {
             CGFloat rpTextY = y + (kRecentRowH - 14) / 2;
             [dName drawAtPoint:NSMakePoint(rpTextX, rpTextY) withAttributes:rpAttrs];
 
+            // Close × on hover
+            if (self.hoveredRecentProject == i) {
+                NSDictionary* closeAttrs = @{
+                    NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightLight],
+                    NSForegroundColorAttributeName: g_textMuted,
+                };
+                [@"\u00D7" drawAtPoint:NSMakePoint(sw - 26, rpTextY) withAttributes:closeAttrs];
+            }
+
             y += kRecentRowH;
         }
     }
@@ -667,13 +677,17 @@ static NSString* const kPaletteHints[] = {
     CGFloat areaX = sbw;
     CGFloat areaW = w - sbw;
     CGFloat centerX = areaX + areaW / 2;
-    CGFloat centerY = h / 2;
+
+    uint16_t rpCount = bridge_get_recent_project_count();
+    // Shift button up to make room for recent projects list
+    CGFloat totalH = 40 + (rpCount > 0 ? 30 + rpCount * 32 : 0);
+    CGFloat startY = (h - totalH) / 2;
 
     // Button dimensions
     CGFloat btnW = 180;
     CGFloat btnH = 40;
     CGFloat btnX = centerX - btnW / 2;
-    CGFloat btnY = centerY - btnH / 2;
+    CGFloat btnY = startY;
 
     // Draw button background
     NSBezierPath* btnPath = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(btnX, btnY, btnW, btnH)
@@ -691,6 +705,50 @@ static NSString* const kPaletteHints[] = {
     CGFloat textX = btnX + (btnW - textSize.width) / 2;
     CGFloat textY = btnY + (btnH - textSize.height) / 2;
     [label drawAtPoint:NSMakePoint(textX, textY) withAttributes:attrs];
+
+    // Recent projects below the button
+    if (rpCount > 0) {
+        CGFloat rpY = btnY + btnH + 30;
+
+        NSDictionary* headerAttrs = @{
+            NSFontAttributeName: self.uiFontSmall,
+            NSForegroundColorAttributeName: g_textMuted,
+            NSKernAttributeName: @1.5,
+        };
+        NSString* headerLabel = @"RECENT PROJECTS";
+        NSSize headerSize = [headerLabel sizeWithAttributes:headerAttrs];
+        [headerLabel drawAtPoint:NSMakePoint(centerX - headerSize.width / 2, rpY) withAttributes:headerAttrs];
+        rpY += 24;
+
+        CGFloat rpRowW = 240;
+        CGFloat rpRowH = 32;
+
+        for (uint16_t i = 0; i < rpCount; i++) {
+            CGFloat rowX = centerX - rpRowW / 2;
+            CGFloat rowY = rpY;
+            NSRect rowRect = NSMakeRect(rowX, rowY, rpRowW, rpRowH);
+
+            if (self.hoveredRecentProject == (NSInteger)(i + 1000)) {
+                [g_hoverBg setFill];
+                NSBezierPath* rowPath = [NSBezierPath bezierPathWithRoundedRect:rowRect xRadius:6 yRadius:6];
+                [rowPath fill];
+            }
+
+            uint16_t dLen = bridge_get_recent_project_display_len(i);
+            const uint8_t* dPtr = bridge_get_recent_project_display(i);
+            NSString* dName = [[NSString alloc] initWithBytes:dPtr length:dLen encoding:NSUTF8StringEncoding];
+            if (!dName) dName = @"?";
+
+            NSDictionary* rpAttrs = @{
+                NSFontAttributeName: self.uiFont,
+                NSForegroundColorAttributeName: g_textDim,
+            };
+            NSSize nameSize = [dName sizeWithAttributes:rpAttrs];
+            [dName drawAtPoint:NSMakePoint(centerX - nameSize.width / 2, rowY + (rpRowH - nameSize.height) / 2) withAttributes:rpAttrs];
+
+            rpY += rpRowH;
+        }
+    }
 }
 
 - (void)drawTerminal {
@@ -912,22 +970,45 @@ static NSString* const kPaletteHints[] = {
         return;
     }
 
-    // Handle empty state button click
+    // Handle empty state clicks
     if (!bridge_is_started()) {
         CGFloat w = self.bounds.size.width;
         CGFloat h = self.bounds.size.height;
         CGFloat sbw = [self sidebarPx];
         CGFloat centerX = sbw + (w - sbw) / 2;
-        CGFloat centerY = h / 2;
+
+        uint16_t rpCount = bridge_get_recent_project_count();
+        CGFloat totalH = 40 + (rpCount > 0 ? 30 + rpCount * 32 : 0);
+        CGFloat startY = (h - totalH) / 2;
+
         CGFloat btnW = 180;
         CGFloat btnH = 40;
         CGFloat btnX = centerX - btnW / 2;
-        CGFloat btnY = centerY - btnH / 2;
+        CGFloat btnY = startY;
 
         if (p.x >= btnX && p.x <= btnX + btnW && p.y >= btnY && p.y <= btnY + btnH) {
             bridge_start_first_session();
             [self setNeedsDisplay:YES];
             return;
+        }
+
+        // Recent project click
+        if (rpCount > 0) {
+            CGFloat rpRowW = 240;
+            CGFloat rpRowH = 32;
+            CGFloat rpY = btnY + btnH + 30 + 24; // after header
+            CGFloat rowX = centerX - rpRowW / 2;
+
+            if (p.x >= rowX && p.x <= rowX + rpRowW && p.y >= rpY) {
+                uint16_t rpIdx = (uint16_t)((p.y - rpY) / rpRowH);
+                if (rpIdx < rpCount) {
+                    uint16_t pathLen = bridge_get_recent_project_path_len(rpIdx);
+                    const uint8_t* pathPtr = bridge_get_recent_project_path(rpIdx);
+                    bridge_create_session_in_dir(pathPtr, pathLen);
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+            }
         }
     }
 
@@ -983,6 +1064,12 @@ static NSString* const kPaletteHints[] = {
             if (p.y >= rpStart) {
                 uint16_t rpIdx = (uint16_t)((p.y - rpStart) / kRecentRowH);
                 if (rpIdx < rpCount) {
+                    // × button (right 28px)
+                    if (p.x >= kSidebarWidth - 28) {
+                        bridge_remove_recent_project(rpIdx);
+                        [self setNeedsDisplay:YES];
+                        return;
+                    }
                     uint16_t pathLen = bridge_get_recent_project_path_len(rpIdx);
                     const uint8_t* pathPtr = bridge_get_recent_project_path(rpIdx);
                     bridge_create_session_in_dir(pathPtr, pathLen);
@@ -1164,6 +1251,30 @@ static NSString* const kPaletteHints[] = {
     self.hoveredSession = -1;
     self.hoveredRecentProject = -1;
 
+    // Empty state recent projects hover (offset by 1000 to distinguish from sidebar)
+    if (!bridge_is_started()) {
+        CGFloat w = self.bounds.size.width;
+        CGFloat h = self.bounds.size.height;
+        CGFloat sbw = [self sidebarPx];
+        CGFloat centerX = sbw + (w - sbw) / 2;
+        uint16_t rpCount = bridge_get_recent_project_count();
+        if (rpCount > 0) {
+            CGFloat totalH = 40 + 30 + rpCount * 32;
+            CGFloat startY = (h - totalH) / 2;
+            CGFloat rpRowW = 240;
+            CGFloat rpRowH = 32;
+            CGFloat rpY = startY + 40 + 30 + 24; // btn + gap + header
+            CGFloat rowX = centerX - rpRowW / 2;
+
+            if (p.x >= rowX && p.x <= rowX + rpRowW && p.y >= rpY) {
+                NSInteger rpIdx = (NSInteger)((p.y - rpY) / rpRowH);
+                if (rpIdx >= 0 && rpIdx < rpCount) {
+                    self.hoveredRecentProject = rpIdx + 1000;
+                }
+            }
+        }
+    }
+
     if (bridge_is_sidebar_visible() && p.x < kSidebarWidth && p.y >= listTop) {
         uint16_t count = bridge_get_session_count();
         CGFloat sessionsEnd = listTop + count * kSessionRowH;
@@ -1191,7 +1302,8 @@ static NSString* const kPaletteHints[] = {
     }
 
     // Cursor style
-    if (bridge_is_sidebar_visible() && p.x < kSidebarWidth && p.y >= listTop) {
+    if ((bridge_is_sidebar_visible() && p.x < kSidebarWidth && p.y >= listTop) ||
+        self.hoveredRecentProject >= 1000) {
         [[NSCursor pointingHandCursor] set];
     } else {
         [[NSCursor IBeamCursor] set];

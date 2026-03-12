@@ -375,25 +375,37 @@ fn updateDisplayNames() void {
 fn computeDisplayName(session: *const state_mod.Session) []const u8 {
     // If the user manually renamed the session, always show that name.
     // Auto-generated names match: cwd dirname, dirname-N, session-N, or bare digits.
-    if (!isAutoName(session.name)) {
+    if (!isAutoNameWithPath(session.name, session.active_path)) {
         return session.name;
     }
 
     const cmd = session.active_command;
 
     // If running a notable app, show its pretty name
-    if (cmd.len > 0 and !isShell(cmd) and !isVersionString(cmd)) {
+    if (cmd.len > 0 and !isShell(cmd)) {
+        // Version strings (e.g. "2.1.74") are typically Claude Code setting its process title
+        if (isVersionString(cmd)) return "Claude Code";
         if (prettyName(cmd)) |pretty| return pretty;
         return cmd; // unknown app — show raw command name
     }
 
-    // Shell or no command — show session name (preserves the -N suffix)
+    // Shell or no command — show directory basename if available
+    if (session.active_path.len > 0) {
+        const dir = std.fs.path.basename(session.active_path);
+        if (dir.len > 0) return dir;
+    }
+
+    // Fallback to session name (preserves the -N suffix)
     return session.name;
 }
 
 /// Returns true if the session name looks auto-generated (not user-renamed).
 /// Auto names: bare digits ("0", "1"), "session-N", or "<cwd>", "<cwd>-N".
 fn isAutoName(name: []const u8) bool {
+    return isAutoNameWithPath(name, "");
+}
+
+fn isAutoNameWithPath(name: []const u8, session_path: []const u8) bool {
     if (name.len == 0) return true;
 
     // Bare digits (tmux default: "0", "1", ...)
@@ -404,10 +416,31 @@ fn isAutoName(name: []const u8) bool {
         if (allDigits(name["session-".len..])) return true;
     }
 
+    // "mterm" (default fallback name)
+    if (std.mem.eql(u8, name, "mterm")) return true;
+
     // Match against cwd dirname
     var cwd_buf: [1024]u8 = undefined;
-    const cwd = std.posix.getcwd(&cwd_buf) catch return false;
+    const cwd = std.posix.getcwd(&cwd_buf) catch "";
     const dir = std.fs.path.basename(cwd);
+    if (matchesDirName(name, dir)) return true;
+
+    // Match against session's own path
+    if (session_path.len > 0) {
+        const session_dir = std.fs.path.basename(session_path);
+        if (matchesDirName(name, session_dir)) return true;
+    }
+
+    // Match against HOME basename
+    if (std.posix.getenv("HOME")) |home| {
+        const home_dir = std.fs.path.basename(home);
+        if (matchesDirName(name, home_dir)) return true;
+    }
+
+    return false;
+}
+
+fn matchesDirName(name: []const u8, dir: []const u8) bool {
     if (dir.len == 0) return false;
 
     // Exact match: "dirname"
@@ -567,6 +600,8 @@ export fn bridge_create_session_in_dir(path_ptr: [*]const u8, path_len: u16) cal
 
     tmux.createSessionInDir(name, path) catch {};
     syncState();
+    // Switch to the newly created session
+    selectSessionByName(name);
     g_redraw = true;
 }
 
@@ -677,6 +712,22 @@ fn addRecentProject(path: []const u8) void {
     g_recent_dirty = true;
 }
 
+export fn bridge_remove_recent_project(idx: u16) callconv(.c) void {
+    if (idx >= g_recent_count) return;
+    // Shift entries after idx up by one
+    var i: u16 = idx;
+    while (i + 1 < g_recent_count) : (i += 1) {
+        g_recent_paths[i] = g_recent_paths[i + 1];
+        g_recent_path_lens[i] = g_recent_path_lens[i + 1];
+        g_recent_display[i] = g_recent_display[i + 1];
+        g_recent_display_lens[i] = g_recent_display_lens[i + 1];
+    }
+    g_recent_count -= 1;
+    g_recent_dirty = true;
+    saveRecentProjects();
+    g_redraw = true;
+}
+
 export fn bridge_is_session_selected(idx: u16) callconv(.c) u8 {
     if (g_state) |*s| {
         return if (s.active_session_idx == idx) 1 else 0;
@@ -709,6 +760,18 @@ export fn bridge_is_sidebar_visible() callconv(.c) u8 {
 
 export fn bridge_get_sidebar_cols() callconv(.c) u16 {
     return if (g_state) |*s| s.sidebar_width else 30;
+}
+
+fn selectSessionByName(name: []const u8) void {
+    var state = &(g_state orelse return);
+    const tmux = &(g_tmux orelse return);
+    for (state.sessions.items, 0..) |session, i| {
+        if (std.mem.eql(u8, session.name, name)) {
+            state.active_session_idx = @intCast(i);
+            tmux.switchSession(session.name) catch {};
+            return;
+        }
+    }
 }
 
 export fn bridge_select_session(idx: u16) callconv(.c) void {
@@ -749,6 +812,8 @@ export fn bridge_create_session() callconv(.c) void {
         std.fmt.bufPrint(&buf, "{s}-{d}", .{ dir, count }) catch return;
     tmux.createSession(name) catch {};
     syncState();
+    // Switch to the newly created session
+    selectSessionByName(name);
     g_redraw = true;
 }
 
