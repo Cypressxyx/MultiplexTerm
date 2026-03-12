@@ -91,6 +91,7 @@ static const ThemeDef kThemes[] = {
 };
 
 static int g_currentTheme = 0;
+static int g_savedTheme = 0; // saved before preview
 static NSColor* g_bg;
 static NSColor* g_sidebarBg;
 static NSColor* g_border;
@@ -751,23 +752,24 @@ static NSString* const kPaletteHints[] = {
             CGFloat cardX = (w - cardW) / 2;
             CGFloat cardY = h * 0.15;
 
-            // Click on "Back" header area
+            // Click on "Back" header area — revert preview
             if (p.x >= cardX && p.x <= cardX + cardW &&
                 p.y >= cardY && p.y < cardY + headerH) {
+                applyTheme(g_savedTheme);
                 self.paletteMode = 0;
                 self.paletteSelection = kPaletteItemCount - 1;
                 [self setNeedsDisplay:YES];
                 return;
             }
 
-            // Click on a theme item
+            // Click on a theme item — confirm selection
             CGFloat itemsTop = cardY + headerH + 4;
             if (p.x >= cardX && p.x <= cardX + cardW &&
                 p.y >= itemsTop && p.y <= cardY + cardH) {
                 int idx = (int)((p.y - itemsTop) / rowH);
                 int themeIdx = (int)(idx + self.themeScroll);
                 if (themeIdx >= 0 && themeIdx < kThemeCount) {
-                    applyTheme(themeIdx);
+                    applyTheme(themeIdx); // confirm
                     self.paletteVisible = NO;
                     self.paletteMode = 0;
                     [self setNeedsDisplay:YES];
@@ -775,7 +777,8 @@ static NSString* const kPaletteHints[] = {
                 }
             }
 
-            // Click outside dismisses
+            // Click outside dismisses — revert preview
+            applyTheme(g_savedTheme);
             self.paletteVisible = NO;
             self.paletteMode = 0;
             [self setNeedsDisplay:YES];
@@ -796,6 +799,7 @@ static NSString* const kPaletteHints[] = {
             if (idx >= 0 && idx < kPaletteItemCount) {
                 if (idx == kPaletteItemCount - 1) {
                     // "Theme..." — switch to theme picker
+                    g_savedTheme = g_currentTheme;
                     self.paletteMode = 1;
                     self.paletteSelection = g_currentTheme;
                     self.themeScroll = 0;
@@ -1001,6 +1005,7 @@ static NSString* const kPaletteHints[] = {
                 int themeIdx = (int)(idx + self.themeScroll);
                 if (themeIdx >= 0 && themeIdx < kThemeCount && themeIdx != self.paletteSelection) {
                     self.paletteSelection = themeIdx;
+                    applyTheme(themeIdx); // live preview on hover
                     [self setNeedsDisplay:YES];
                 }
             }
@@ -1161,10 +1166,10 @@ static NSString* const kPaletteHints[] = {
                     NSInteger sel = self.paletteSelection;
                     if (sel > 0) {
                         self.paletteSelection = sel - 1;
-                        // Scroll up if needed
                         if (self.paletteSelection < self.themeScroll) {
                             self.themeScroll = self.paletteSelection;
                         }
+                        applyTheme((int)self.paletteSelection); // live preview
                     }
                     [self setNeedsDisplay:YES];
                     return;
@@ -1173,25 +1178,26 @@ static NSString* const kPaletteHints[] = {
                     NSInteger sel = self.paletteSelection;
                     if (sel < kThemeCount - 1) {
                         self.paletteSelection = sel + 1;
-                        // Scroll down if needed (12 visible items)
                         if (self.paletteSelection >= self.themeScroll + 12) {
                             self.themeScroll = self.paletteSelection - 11;
                         }
+                        applyTheme((int)self.paletteSelection); // live preview
                     }
                     [self setNeedsDisplay:YES];
                     return;
                 }
-                case 36: { // Enter — apply theme
-                    applyTheme((int)self.paletteSelection);
+                case 36: { // Enter — confirm theme
+                    // Theme is already applied via preview, just close
                     self.paletteVisible = NO;
                     self.paletteMode = 0;
                     [self setNeedsDisplay:YES];
                     return;
                 }
-                case 53: // Escape — back to commands
-                case 51: { // Delete/Backspace — back to commands
+                case 53: // Escape — revert and go back
+                case 51: { // Delete/Backspace — revert and go back
+                    applyTheme(g_savedTheme); // revert to original
                     self.paletteMode = 0;
-                    self.paletteSelection = kPaletteItemCount - 1; // highlight "Theme..."
+                    self.paletteSelection = kPaletteItemCount - 1;
                     [self setNeedsDisplay:YES];
                     return;
                 }
@@ -1212,10 +1218,10 @@ static NSString* const kPaletteHints[] = {
                 case 36: // Enter
                     if (self.paletteSelection == kPaletteItemCount - 1) {
                         // "Theme..." — switch to theme picker mode
+                        g_savedTheme = g_currentTheme; // save for revert
                         self.paletteMode = 1;
                         self.paletteSelection = g_currentTheme;
                         self.themeScroll = 0;
-                        // Ensure current theme is visible
                         if (self.paletteSelection >= 12) {
                             self.themeScroll = self.paletteSelection - 6;
                         }
