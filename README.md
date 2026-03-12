@@ -137,6 +137,29 @@ brew install tmux
 | Cmd+V | Paste |
 | Cmd+Q | Quit |
 
+## Themes
+
+25 built-in themes with live preview — open **Cmd+K → Theme...** to browse and apply.
+
+| | Dark | Light |
+|---|---|---|
+| **Vercel** | Vercel Dark *(default)* | |
+| **Gruvbox** | Gruvbox Dark | Gruvbox Light |
+| **Catppuccin** | Catppuccin Mocha | Catppuccin Latte |
+| **Kanagawa** | Kanagawa | Kanagawa Light |
+| **Nord** | Nord | |
+| **Dracula** | Dracula | |
+| **One** | One Dark | One Light |
+| **Solarized** | Solarized Dark | Solarized Light |
+| **Tokyo Night** | Tokyo Night | Tokyo Night Light |
+| **Rosé Pine** | Rosé Pine | Rosé Pine Dawn |
+| **Everforest** | Everforest Dark | Everforest Light |
+| **Monokai** | Monokai Pro | |
+| **Ayu** | Ayu Dark | Ayu Light |
+| **Nightfox** | Nightfox | |
+| **Synthwave** | Synthwave '84 | |
+| **GitHub** | GitHub Dark | |
+
 ## Session Management
 
 - Click a session in the sidebar to switch
