@@ -46,14 +46,6 @@ pub const Screen = struct {
     auto_wrap: bool = true,
     wrap_next: bool = false, // deferred wrap flag
 
-    // Charset state (VT100 line-drawing support)
-    charset_g0: Charset = .ascii,
-    charset_g1: Charset = .ascii,
-    active_charset: CharsetSlot = .g0,
-
-    pub const Charset = enum { ascii, line_drawing };
-    pub const CharsetSlot = enum { g0, g1 };
-
     pub fn init(allocator: std.mem.Allocator, cols: u16, rows: u16) !Screen {
         const total = @as(usize, cols) * @as(usize, rows);
         const cells = try allocator.alloc(Cell, total);
@@ -108,15 +100,10 @@ pub const Screen = struct {
         if (self.cursor_x >= self.cols) {
             self.cursor_x = self.cols - 1;
         }
-        // Apply line-drawing charset mapping
-        const mapped = if (self.isLineDrawing() and ch >= 0x60 and ch <= 0x7e)
-            lineDrawingMap(ch)
-        else
-            ch;
         const idx = @as(usize, self.cursor_y) * self.cols + self.cursor_x;
         if (idx < self.cells.len) {
             self.cells[idx] = self.current_attr;
-            self.cells[idx].char = mapped;
+            self.cells[idx].char = ch;
         }
         if (self.cursor_x + 1 >= self.cols) {
             if (self.auto_wrap) {
@@ -392,43 +379,5 @@ pub const Screen = struct {
                 else => {},
             }
         }
-    }
-
-    fn isLineDrawing(self: *const Screen) bool {
-        return switch (self.active_charset) {
-            .g0 => self.charset_g0 == .line_drawing,
-            .g1 => self.charset_g1 == .line_drawing,
-        };
-    }
-
-    fn lineDrawingMap(ch: u21) u21 {
-        return switch (ch) {
-            '`' => 0x25C6, // ◆
-            'a' => 0x2592, // ▒
-            'f' => 0x00B0, // °
-            'g' => 0x00B1, // ±
-            'j' => 0x2518, // ┘
-            'k' => 0x2510, // ┐
-            'l' => 0x250C, // ┌
-            'm' => 0x2514, // └
-            'n' => 0x253C, // ┼
-            'o' => 0x23BA, // ⎺
-            'p' => 0x23BB, // ⎻
-            'q' => 0x2500, // ─
-            'r' => 0x23BC, // ⎼
-            's' => 0x23BD, // ⎽
-            't' => 0x251C, // ├
-            'u' => 0x2524, // ┤
-            'v' => 0x2534, // ┴
-            'w' => 0x252C, // ┬
-            'x' => 0x2502, // │
-            'y' => 0x2264, // ≤
-            'z' => 0x2265, // ≥
-            '{' => 0x03C0, // π
-            '|' => 0x2260, // ≠
-            '}' => 0x00A3, // £
-            '~' => 0x00B7, // ·
-            else => ch,
-        };
     }
 };

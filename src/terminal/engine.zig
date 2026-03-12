@@ -32,25 +32,10 @@ pub const TerminalEngine = struct {
                     screen.scroll_bottom = screen.rows -| 1;
                     screen.auto_wrap = true;
                     screen.cursor_visible = true;
-                    screen.charset_g0 = .ascii;
-                    screen.charset_g1 = .ascii;
-                    screen.active_charset = .g0;
                 },
                 .csi => |csi| self.engine.handleCsi(csi),
                 .execute => {},
                 .osc => {},
-                .charset_g0 => |ch| {
-                    screen.charset_g0 = if (ch == '0') .line_drawing else .ascii;
-                },
-                .charset_g1 => |ch| {
-                    screen.charset_g1 = if (ch == '0') .line_drawing else .ascii;
-                },
-                .shift_out => {
-                    screen.active_charset = .g1;
-                },
-                .shift_in => {
-                    screen.active_charset = .g0;
-                },
             }
         }
     };
