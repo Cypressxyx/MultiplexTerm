@@ -1417,6 +1417,15 @@ static NSString* const kPaletteHints[] = {
         setenv("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", 1);
     }
 
+    // Ensure locale is set — without this, tmux uses VT100 line-drawing
+    // escape sequences instead of UTF-8 box-drawing characters
+    if (!getenv("LANG")) {
+        setenv("LANG", "en_US.UTF-8", 1);
+    }
+    if (!getenv("LC_ALL")) {
+        setenv("LC_ALL", "en_US.UTF-8", 1);
+    }
+
     NSRect frame = NSMakeRect(100, 100, 1280, 820);
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                        NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable |
