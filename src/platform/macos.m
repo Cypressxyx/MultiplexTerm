@@ -440,9 +440,7 @@ static NSString* const kPaletteHints[] = {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
 
-    // Dim overlay — light enough to still see terminal content
-    [[NSColor colorWithWhite:0 alpha:0.15] setFill];
-    NSRectFill(self.bounds);
+    // No full-screen overlay — card has its own shadow/border for contrast
 
     if (self.paletteMode == 1) {
         [self drawThemePicker];
@@ -457,10 +455,19 @@ static NSString* const kPaletteHints[] = {
     CGFloat cardX = (w - cardW) / 2;
     CGFloat cardY = h * 0.2;
 
+    // Shadow behind card
+    NSShadow* shadow = [[NSShadow alloc] init];
+    shadow.shadowColor = [NSColor colorWithWhite:0 alpha:0.6];
+    shadow.shadowOffset = NSMakeSize(0, -4);
+    shadow.shadowBlurRadius = 24;
+
+    [NSGraphicsContext saveGraphicsState];
+    [shadow set];
     NSBezierPath* cardPath = [NSBezierPath bezierPathWithRoundedRect:
         NSMakeRect(cardX, cardY, cardW, cardH) xRadius:12 yRadius:12];
     [g_sidebarBg setFill];
     [cardPath fill];
+    [NSGraphicsContext restoreGraphicsState];
 
     [g_border setStroke];
     cardPath.lineWidth = 1;
@@ -523,10 +530,19 @@ static NSString* const kPaletteHints[] = {
     CGFloat cardX = (w - cardW) / 2;
     CGFloat cardY = h * 0.15;
 
+    // Shadow behind card
+    NSShadow* shadow = [[NSShadow alloc] init];
+    shadow.shadowColor = [NSColor colorWithWhite:0 alpha:0.6];
+    shadow.shadowOffset = NSMakeSize(0, -4);
+    shadow.shadowBlurRadius = 24;
+
+    [NSGraphicsContext saveGraphicsState];
+    [shadow set];
     NSBezierPath* cardPath = [NSBezierPath bezierPathWithRoundedRect:
         NSMakeRect(cardX, cardY, cardW, cardH) xRadius:12 yRadius:12];
     [g_sidebarBg setFill];
     [cardPath fill];
+    [NSGraphicsContext restoreGraphicsState];
 
     [g_border setStroke];
     cardPath.lineWidth = 1;
