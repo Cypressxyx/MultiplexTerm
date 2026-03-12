@@ -10,6 +10,8 @@ pub const VtParser = struct {
     utf8_buf: [4]u8 = undefined,
     utf8_len: u3 = 0,
     utf8_need: u3 = 0,
+    // Charset designation: which slot is being set ('(' = G0, ')' = G1)
+    charset_slot: u8 = '(',
 
     const State = enum {
         ground,
@@ -39,6 +41,10 @@ pub const VtParser = struct {
         restore_cursor: void,
         reverse_index: void,
         index: void,
+        charset_g0: u8, // ESC ( <char>: 0=line-drawing, B=ASCII
+        charset_g1: u8, // ESC ) <char>
+        shift_out: void, // 0x0E: activate G1
+        shift_in: void, // 0x0F: activate G0
     };
 
     pub const CsiEvent = struct {
@@ -59,7 +65,12 @@ pub const VtParser = struct {
             .dcs_passthrough => self.handleDcs(byte),
             .utf8_seq => self.handleUtf8(byte, callback),
             .charset => {
-                // Consume one byte after ESC ( or ESC ) and return to ground
+                // Byte after ESC ( or ESC ) designates the charset
+                if (self.charset_slot == '(') {
+                    callback.onEvent(.{ .charset_g0 = byte });
+                } else {
+                    callback.onEvent(.{ .charset_g1 = byte });
+                }
                 self.state = .ground;
             },
         }
@@ -132,6 +143,8 @@ pub const VtParser = struct {
             0x09 => callback.onEvent(.tab),
             0x0a, 0x0b, 0x0c => callback.onEvent(.newline),
             0x0d => callback.onEvent(.carriage_return),
+            0x0e => callback.onEvent(.shift_out), // SO: activate G1
+            0x0f => callback.onEvent(.shift_in), // SI: activate G0
             0x1b => {}, // ESC handled in ground
             else => {},
         }
@@ -175,6 +188,7 @@ pub const VtParser = struct {
             },
             '(', ')' => {
                 // Charset designation — consume next byte
+                self.charset_slot = byte;
                 self.state = .charset;
             },
             '#' => {

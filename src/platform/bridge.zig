@@ -371,12 +371,12 @@ fn computeDisplayName(session: *const state_mod.Session) []const u8 {
     const cmd = session.active_command;
 
     // If running a notable app, show its pretty name
-    if (cmd.len > 0 and !isShell(cmd)) {
+    if (cmd.len > 0 and !isShell(cmd) and !isVersionString(cmd)) {
         if (prettyName(cmd)) |pretty| return pretty;
         return cmd; // unknown app — show raw command name
     }
 
-    // Shell or no command — show session name (preserves the -N suffix)
+    // Shell, version string, or no command — show session name
     return session.name;
 }
 
@@ -428,6 +428,22 @@ fn isShell(cmd: []const u8) bool {
         if (std.mem.eql(u8, cmd, s)) return true;
     }
     return false;
+}
+
+/// Returns true if cmd looks like a version string (e.g. "2.1.74").
+/// Some apps (e.g. Claude Code) set their process title to their version,
+/// which tmux reports as pane_current_command. These should not be shown.
+fn isVersionString(cmd: []const u8) bool {
+    if (cmd.len == 0) return false;
+    var has_dot = false;
+    for (cmd) |c| {
+        if (c == '.') {
+            has_dot = true;
+        } else if (c < '0' or c > '9') {
+            return false;
+        }
+    }
+    return has_dot; // must have at least one dot to be a version
 }
 
 fn prettyName(cmd: []const u8) ?[]const u8 {
