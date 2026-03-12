@@ -23,6 +23,9 @@ zig build
 # Run
 ./zig-out/bin/mterm
 
+# Install as macOS .app bundle to /Applications
+zig build install-app
+
 # Run tests
 zig build test
 
@@ -40,8 +43,10 @@ zig build lint
 ```mermaid
 graph TD
     subgraph GUI["macOS / Cocoa — src/platform/macos.m"]
-        Sidebar["Sidebar\nSessions, + New, Cmd+K palette"]
+        Sidebar["Sidebar\nSessions, Remote, Recent Projects"]
         TermView["Terminal Rendering\ndrawTerminal, drawCursor"]
+        Palette["Command Palette\nCmd+K, themes, add SSH host"]
+        DragDrop["Drag & Drop\nFile path paste"]
     end
 
     subgraph Bridge["Bridge Layer (Zig) — src/platform/bridge.zig"]
@@ -49,6 +54,7 @@ graph TD
         BridgeKey["bridge_key_input()"]
         BridgeResize["bridge_resize()"]
         BridgeSession["bridge_select/create/kill_session()"]
+        BridgeSSH["bridge_*ssh*() / bridge_is_ssh_session()"]
     end
 
     subgraph Core["Core Modules"]
@@ -58,26 +64,33 @@ graph TD
         Parser["VT Parser\nsrc/terminal/parser.zig"]
         Screen["Screen Model\nsrc/terminal/screen.zig"]
         State["App State\nsrc/state.zig"]
+        SSH["SSH Config\nsrc/ssh.zig"]
     end
 
     TmuxServer["tmux server\n(subprocess)"]
+    RemoteHost["Remote SSH host"]
 
     Sidebar -->|"mouse click"| BridgeSession
+    Sidebar -->|"SSH click"| BridgeSSH
     TermView -->|"NSTimer 60fps"| BridgeTick
     GUI -->|"keyDown"| BridgeKey
     GUI -->|"setFrameSize"| BridgeResize
+    DragDrop -->|"file path"| BridgeKey
 
     BridgeTick --> PTY
     BridgeTick --> Engine
     BridgeTick --> State
     BridgeKey --> PTY
     BridgeSession --> Tmux
+    BridgeSSH --> SSH
+    BridgeSSH --> Tmux
     BridgeResize --> Engine
 
     PTY <-->|"read/write"| TmuxServer
     Tmux -->|"subprocess calls"| TmuxServer
     Engine --> Parser
     Engine --> Screen
+    SSH -->|"ssh subprocess"| RemoteHost
 
     BridgeTick -->|"syncState every 30 ticks"| Tmux
     BridgeTick -->|"updateRenderCells"| TermView
@@ -114,6 +127,16 @@ sequenceDiagram
     GUI->>Bridge: bridge_key_input(bytes)
     Bridge->>PTY: write(bytes)
     PTY->>Tmux: input forwarded
+
+    Note over GUI,Tmux: SSH Remote Session
+    User->>GUI: click host in REMOTE
+    GUI->>Bridge: bridge_toggle_ssh_host()
+    Bridge->>Bridge: spawn probe thread
+    Bridge-->>Bridge: ssh host tmux list-sessions
+    User->>GUI: click + New Session
+    GUI->>Bridge: bridge_create_ssh_shell()
+    Bridge->>Tmux: new-session ssh host
+    Note right of Bridge: Session named "ssh:host-N"<br/>shown under REMOTE, not SESSIONS
 
     Note over GUI,Tmux: Session Exit
     Tmux-->>PTY: HUP
@@ -171,13 +194,16 @@ sequenceDiagram
 4. Scroll wheel → xterm mouse wheel events (tmux mouse mode)
 
 ### SSH Remote Sessions
-1. Sidebar shows "REMOTE" section (between New Session button and Recent Projects) if `~/.ssh/config` has hosts
-2. Hosts parsed by `ssh_mod.parseSshConfig()` — skips wildcard hosts (`*`, `?`)
+1. Sidebar shows "REMOTE" section (between New Session button and Recent Projects) — always visible
+2. Hosts from `~/.ssh/config` (via `ssh_mod.parseSshConfig()`, skips wildcards) + manual hosts from `~/.mterm/ssh_hosts`
 3. Click disconnected host → spawns background thread running `ssh -o BatchMode=yes host tmux list-sessions`
-4. If successful, host status = connected, remote tmux sessions shown expanded under host
-5. Click remote session → `tmux.createSshSession()` creates local tmux session running `ssh host -t 'tmux attach-session -t session'`
-6. The SSH session appears in the normal SESSIONS list with name "host/session"
-7. Status dots: green=connected, yellow=connecting, red=error, hollow=disconnected
+4. If successful, host status = connected, expanded view shows: active SSH sessions → remote tmux sessions → "+ New Session"
+5. Click remote tmux session → `tmux.createSshSession()` creates local tmux session running `ssh host -t 'tmux attach-session -t session'`
+6. Click "+ New Session" → `bridge_create_ssh_shell()` creates local tmux session running `ssh host` (plain shell)
+7. **SSH sessions show under REMOTE, not SESSIONS**: all SSH-created sessions use `ssh:` name prefix (e.g., `ssh:host/session`, `ssh:host-N`), filtered from SESSIONS list via `bridge_is_ssh_session()`, displayed under their host in REMOTE via `bridge_get_ssh_active_count/display/idx()`
+8. Active SSH sessions show with green dot + accent bar when selected; remote tmux sessions show dimmer (not yet connected)
+9. "+ Add Host" button opens in-app palette card (`paletteMode=2`) for manual host entry
+10. Status dots: green=connected, yellow=connecting, red=error, hollow=disconnected
 
 ### Session Exit / HUP
 1. PTY HUP detected → `reattachOrQuit()`
@@ -232,7 +258,7 @@ sequenceDiagram
 - `applyTheme(idx)` computes derived colors (textDim, textMuted, selectedBg, hoverBg) via `blendHex()`
 - `g_currentTheme` tracks active theme index; `g_savedTheme` saves the pre-preview theme for revert
 - **Live preview**: navigating themes (keyboard or mouse hover) calls `applyTheme()` immediately; Escape/Back reverts to `g_savedTheme`
-- `paletteMode`: 0=commands, 1=themes — controls which view `drawPalette` renders
+- `paletteMode`: 0=commands, 1=themes, 2=add SSH host — controls which view `drawPalette` renders
 - Both command and theme palette modes have a search bar for filtering items by name (case-insensitive substring match)
 - `paletteSearchText` (NSMutableString) holds the current search query; cleared on mode switch, open/close
 - `paletteSelection` is always an index into the *filtered* list, not the absolute list; mapped back via `getFilteredCommandIndices:`/`getFilteredThemeIndices:`
@@ -243,11 +269,19 @@ sequenceDiagram
 - Floating card over terminal — no full-screen overlay (dark overlays make dark themes invisible)
 - Card uses drop shadow (`NSShadow`) for contrast against terminal content
 - All palette colors use theme globals (`g_sidebarBg`, `g_border`, `g_selectedBg`, `g_text`, etc.) — never hardcoded hex
-- Two modes: commands (`paletteMode=0`, 9 items) and theme picker (`paletteMode=1`, 25 scrollable items)
+- Three modes: commands (`paletteMode=0`, 9 items), theme picker (`paletteMode=1`, 25 scrollable items), add SSH host (`paletteMode=2`, text input)
 - Commands mode: up/down navigate, Enter executes (or enters theme submenu for last item), Escape closes
 - Theme mode: up/down navigate with live preview, Enter confirms, Escape/Backspace reverts and goes back
+- Add SSH host mode: uses search bar as input field, Enter adds host, Escape cancels — no NSAlert
 - Mouse: click to select, hover to highlight (and preview in theme mode), scroll wheel in theme picker
 - Cmd+K while in theme preview reverts to saved theme before closing
+
+### Drag and Drop
+- Dragging files from Finder into the terminal pastes their file paths (shell-escaped)
+- Multiple files are space-separated
+- Implemented via `NSDraggingDestination` protocol on STTerminalView
+- Registered for `NSPasteboardTypeFileURL` in `initWithFrame`
+- Special characters (spaces, quotes, parens) are escaped for shell safety
 
 ## Testing
 
@@ -272,6 +306,9 @@ zig build test
 # - SSH: REMOTE section shows hosts from ~/.ssh/config
 # - SSH: Click host → status changes to connecting, then shows remote tmux sessions
 # - SSH: Click remote session → creates local tmux session with SSH attach, appears in sessions list
+# - SSH: Click "+ Add Host" → opens in-app input card (not NSAlert), type host and press Enter
+# - Drag a file from Finder into terminal → file path is pasted (shell-escaped)
+# - Drag multiple files → all paths pasted space-separated
 
 # Logs
 cat /tmp/mterm.log
@@ -292,6 +329,9 @@ cat /tmp/mterm.log
 - **Finder/Raycast launch PATH**: macOS GUI apps get a minimal PATH (`/usr/bin:/bin`). Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) must be added at startup in `applicationDidFinishLaunching` or tmux won't be found.
 - **Finder/Raycast launch cwd**: When launched from Finder/Raycast, cwd is `/`. `basename("/")` is empty, which gives tmux an invalid session name. ALL code that derives names from cwd (`startPty`, `bridge_create_session`) must fall back to HOME basename or "mterm".
 - **Finder/Raycast launch locale**: Without `LANG`/`LC_ALL` set, tmux uses VT100 line-drawing escape sequences instead of UTF-8 box-drawing characters, causing garbled rendering. Must set `LANG=en_US.UTF-8` at startup.
-- **Sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all compute the same flow layout: sessions → "+ New Session" button → SSH remote section → recent projects header → recent project rows. Never bottom-anchor the button.
+- **Sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all compute the same flow layout: sessions (skip SSH) → "+ New Session" button → SSH remote section (active SSH sessions → remote tmux sessions → "+ New Session" per host → "+ Add Host") → recent projects. Never bottom-anchor the button.
 - **SSH probe thread safety**: The SSH connection probe runs in a background thread (`sshProbeThreadFn`). It writes to `g_ssh_hosts[idx]` fields and sets `status = .connected` LAST so the main thread sees consistent state. Uses `std.heap.page_allocator` (thread-safe) for the subprocess.
-- **SSH session naming**: Remote sessions create local tmux sessions named "host/session". This doesn't match any auto-generated pattern so `isAutoNameWithPath` treats it as user-renamed and shows it as-is in the sidebar.
+- **SSH session naming**: All SSH sessions use `ssh:` prefix (e.g., `ssh:host/session`, `ssh:host-3`). `bridge_is_ssh_session()` checks this prefix. `isSshSessionForHost()` matches sessions to hosts by checking `ssh:<hostname>/` or `ssh:<hostname>-`. These sessions are hidden from SESSIONS and shown under REMOTE.
+- **SSH session sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all walk session rows with `bridge_is_ssh_session()` skip — never compute `sessionsEnd = listTop + count * kSessionRowH` since SSH sessions are excluded.
+- **No NSAlert for SSH host input**: The "Add Host" prompt MUST use the in-app palette card (`paletteMode=2`), not NSAlert — native macOS dialogs don't match the custom-drawn UI style.
+- **Drag-and-drop path escaping**: File paths from Finder drag must be shell-escaped (spaces, quotes, parens) before sending to PTY, or commands will break on paths with special characters.

@@ -750,15 +750,96 @@ var g_ssh_loaded: bool = false;
 var g_ssh_probe_thread: ?std.Thread = null;
 var g_ssh_probe_host: u16 = 0;
 
+// Manual SSH hosts persisted to ~/.mterm/ssh_hosts
+var g_ssh_manual_start: u16 = 0; // index where manual hosts start (after config hosts)
+
 fn loadSshHosts() void {
+    // Load from ~/.ssh/config
     var raw_hosts: [MAX_SSH_HOSTS]ssh_mod.SshHost = undefined;
-    const count = ssh_mod.parseSshConfig(&raw_hosts);
-    g_ssh_host_count = count;
-    for (0..count) |i| {
-        g_ssh_hosts[i] = .{ .host = raw_hosts[i] };
+    const config_count = ssh_mod.parseSshConfig(&raw_hosts);
+    var total: u16 = 0;
+    for (0..config_count) |i| {
+        g_ssh_hosts[total] = .{ .host = raw_hosts[i] };
+        total += 1;
     }
+    g_ssh_manual_start = total;
+
+    // Load manual hosts from ~/.mterm/ssh_hosts
+    const manual_path = sshHostsPath() orelse {
+        g_ssh_host_count = total;
+        g_ssh_loaded = true;
+        return;
+    };
+    const file = std.fs.cwd().openFile(manual_path, .{}) catch {
+        g_ssh_host_count = total;
+        g_ssh_loaded = true;
+        return;
+    };
+    defer file.close();
+
+    var buf: [4096]u8 = undefined;
+    const n = file.readAll(&buf) catch {
+        g_ssh_host_count = total;
+        g_ssh_loaded = true;
+        return;
+    };
+    var lines = std.mem.splitScalar(u8, buf[0..n], '\n');
+    while (lines.next()) |line| {
+        const trimmed = std.mem.trimRight(u8, line, &[_]u8{ '\r', ' ', '\t' });
+        if (trimmed.len == 0) continue;
+        if (total >= MAX_SSH_HOSTS) break;
+
+        var host: ssh_mod.SshHost = undefined;
+        if (ssh_mod.parseHostString(trimmed, &host)) {
+            // Deduplicate against config hosts
+            var dup = false;
+            for (0..g_ssh_manual_start) |ci| {
+                const existing = g_ssh_hosts[ci].host.name[0..g_ssh_hosts[ci].host.name_len];
+                if (std.mem.eql(u8, existing, host.name[0..host.name_len])) {
+                    dup = true;
+                    break;
+                }
+            }
+            if (!dup) {
+                g_ssh_hosts[total] = .{ .host = host };
+                total += 1;
+            }
+        }
+    }
+    g_ssh_host_count = total;
     g_ssh_loaded = true;
-    logFmt("Loaded {d} SSH hosts from config", .{count});
+    logFmt("Loaded {d} SSH hosts ({d} config, {d} manual)", .{ total, config_count, total - config_count });
+}
+
+fn sshHostsPath() ?[]const u8 {
+    const S = struct {
+        var buf: [512]u8 = undefined;
+    };
+    const home = std.posix.getenv("HOME") orelse return null;
+    return std.fmt.bufPrint(&S.buf, "{s}/.mterm/ssh_hosts", .{home}) catch null;
+}
+
+fn saveManualSshHosts() void {
+    const path = sshHostsPath() orelse return;
+    // Ensure ~/.mterm/ exists
+    const home = std.posix.getenv("HOME") orelse return;
+    const S = struct {
+        var dir_buf: [512]u8 = undefined;
+    };
+    const dir_path = std.fmt.bufPrint(&S.dir_buf, "{s}/.mterm", .{home}) catch return;
+    std.fs.cwd().makeDir(dir_path) catch |e| {
+        if (e != error.PathAlreadyExists) return;
+    };
+    const file = std.fs.cwd().createFile(path, .{ .truncate = true }) catch return;
+    defer file.close();
+    var i: u16 = g_ssh_manual_start;
+    while (i < g_ssh_host_count) : (i += 1) {
+        const h = &g_ssh_hosts[i].host;
+        if (h.name_len > 0) {
+            file.writeAll(h.name[0..h.name_len]) catch {};
+            file.writeAll("\n") catch {};
+        }
+    }
 }
 
 fn sshProbeThreadFn() void {
@@ -874,9 +955,9 @@ export fn bridge_select_ssh_session(host_idx: u16, sess_idx: u16) callconv(.c) v
     const sess_name = host.sessions[sess_idx].name[0..host.sessions[sess_idx].name_len];
     const tmux = &(g_tmux orelse return);
 
-    // Create a local tmux session name: "host/session"
+    // Create a local tmux session name: "ssh:host/session"
     var name_buf: [128]u8 = undefined;
-    const local_name = std.fmt.bufPrint(&name_buf, "{s}/{s}", .{ host_name, sess_name }) catch return;
+    const local_name = std.fmt.bufPrint(&name_buf, "ssh:{s}/{s}", .{ host_name, sess_name }) catch return;
 
     if (!g_started) {
         // Need to start PTY first with a regular session, then create the SSH session
@@ -918,7 +999,7 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
     // Create a local tmux session that just opens an SSH shell
     var name_buf: [128]u8 = undefined;
     const count = state.sessions.items.len;
-    const local_name = std.fmt.bufPrint(&name_buf, "{s}-{d}", .{ host_name, count }) catch return;
+    const local_name = std.fmt.bufPrint(&name_buf, "ssh:{s}-{d}", .{ host_name, count }) catch return;
 
     if (!g_started) {
         startPty(g_initial_cols, g_initial_rows);
@@ -946,6 +1027,116 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
         };
     }
     g_redraw = true;
+}
+
+export fn bridge_add_ssh_host(name_ptr: [*]const u8, name_len: u16) callconv(.c) void {
+    if (g_ssh_host_count >= MAX_SSH_HOSTS) return;
+    const input = name_ptr[0..name_len];
+    var host: ssh_mod.SshHost = undefined;
+    if (!ssh_mod.parseHostString(input, &host)) return;
+
+    // Check for duplicates
+    for (0..g_ssh_host_count) |i| {
+        const existing = g_ssh_hosts[i].host.name[0..g_ssh_hosts[i].host.name_len];
+        if (std.mem.eql(u8, existing, host.name[0..host.name_len])) return;
+    }
+
+    g_ssh_hosts[g_ssh_host_count] = .{ .host = host };
+    g_ssh_host_count += 1;
+    saveManualSshHosts();
+    g_redraw = true;
+    logFmt("Added SSH host: {s}", .{input});
+}
+
+export fn bridge_remove_ssh_host(idx: u16) callconv(.c) void {
+    if (idx >= g_ssh_host_count) return;
+    if (idx < g_ssh_manual_start) return; // don't remove config hosts
+    // Shift entries
+    var i: u16 = idx;
+    while (i + 1 < g_ssh_host_count) : (i += 1) {
+        g_ssh_hosts[i] = g_ssh_hosts[i + 1];
+    }
+    g_ssh_host_count -= 1;
+    saveManualSshHosts();
+    g_redraw = true;
+}
+
+export fn bridge_is_ssh_host_manual(idx: u16) callconv(.c) u8 {
+    return if (idx >= g_ssh_manual_start) 1 else 0;
+}
+
+/// Returns 1 if the session at idx is an SSH session (name starts with "ssh:")
+export fn bridge_is_ssh_session(idx: u16) callconv(.c) u8 {
+    if (g_state) |*s| {
+        if (idx < s.sessions.items.len) {
+            const name = s.sessions.items[idx].name;
+            if (name.len >= 4 and std.mem.eql(u8, name[0..4], "ssh:")) return 1;
+        }
+    }
+    return 0;
+}
+
+/// Count active local SSH sessions belonging to a given SSH host
+export fn bridge_get_ssh_active_count(host_idx: u16) callconv(.c) u16 {
+    if (host_idx >= g_ssh_host_count) return 0;
+    const host_name = g_ssh_hosts[host_idx].host.name[0..g_ssh_hosts[host_idx].host.name_len];
+    const state = &(g_state orelse return 0);
+    var count: u16 = 0;
+    for (state.sessions.items) |session| {
+        if (isSshSessionForHost(session.name, host_name)) count += 1;
+    }
+    return count;
+}
+
+/// Get the actual session index of the Nth active SSH session for a host
+export fn bridge_get_ssh_active_session_idx(host_idx: u16, nth: u16) callconv(.c) u16 {
+    if (host_idx >= g_ssh_host_count) return 0xFFFF;
+    const host_name = g_ssh_hosts[host_idx].host.name[0..g_ssh_hosts[host_idx].host.name_len];
+    const state = &(g_state orelse return 0xFFFF);
+    var count: u16 = 0;
+    for (state.sessions.items, 0..) |session, i| {
+        if (isSshSessionForHost(session.name, host_name)) {
+            if (count == nth) return @intCast(i);
+            count += 1;
+        }
+    }
+    return 0xFFFF;
+}
+
+/// Get display name for an active SSH session (strip "ssh:" prefix)
+export fn bridge_get_ssh_active_display(host_idx: u16, nth: u16) callconv(.c) [*]const u8 {
+    const idx = bridge_get_ssh_active_session_idx(host_idx, nth);
+    if (idx == 0xFFFF) return "".ptr;
+    // Use the display name but strip the "ssh:" prefix if present
+    const dlen = g_display_lens[idx];
+    if (dlen >= 4 and std.mem.eql(u8, g_display_bufs[idx][0..4], "ssh:")) {
+        return g_display_bufs[idx][4..].ptr;
+    }
+    if (dlen > 0) return &g_display_bufs[idx];
+    return bridge_get_session_name(idx);
+}
+
+export fn bridge_get_ssh_active_display_len(host_idx: u16, nth: u16) callconv(.c) u16 {
+    const idx = bridge_get_ssh_active_session_idx(host_idx, nth);
+    if (idx == 0xFFFF) return 0;
+    const dlen = g_display_lens[idx];
+    if (dlen >= 4 and std.mem.eql(u8, g_display_bufs[idx][0..4], "ssh:")) {
+        return dlen - 4;
+    }
+    if (dlen > 0) return dlen;
+    return bridge_get_session_name_len(idx);
+}
+
+/// Check if a session name belongs to a specific SSH host.
+/// Matches "ssh:<hostname>/..." and "ssh:<hostname>-..."
+fn isSshSessionForHost(session_name: []const u8, host_name: []const u8) bool {
+    if (session_name.len < 4 + host_name.len) return false;
+    if (!std.mem.eql(u8, session_name[0..4], "ssh:")) return false;
+    if (!std.mem.eql(u8, session_name[4 .. 4 + host_name.len], host_name)) return false;
+    // Must be followed by '/' or '-' or end of string
+    if (session_name.len == 4 + host_name.len) return true;
+    const next = session_name[4 + host_name.len];
+    return next == '/' or next == '-';
 }
 
 export fn bridge_is_session_selected(idx: u16) callconv(.c) u8 {

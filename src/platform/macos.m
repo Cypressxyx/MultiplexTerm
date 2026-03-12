@@ -62,6 +62,14 @@ extern void bridge_select_ssh_session(uint16_t host_idx, uint16_t sess_idx);
 extern void bridge_disconnect_ssh_host(uint16_t idx);
 extern void bridge_refresh_ssh_hosts(void);
 extern void bridge_create_ssh_shell(uint16_t host_idx);
+extern void bridge_add_ssh_host(const uint8_t* name, uint16_t len);
+extern void bridge_remove_ssh_host(uint16_t idx);
+extern uint8_t bridge_is_ssh_host_manual(uint16_t idx);
+extern uint8_t bridge_is_ssh_session(uint16_t idx);
+extern uint16_t bridge_get_ssh_active_count(uint16_t host_idx);
+extern uint16_t bridge_get_ssh_active_session_idx(uint16_t host_idx, uint16_t nth);
+extern const uint8_t* bridge_get_ssh_active_display(uint16_t host_idx, uint16_t nth);
+extern uint16_t bridge_get_ssh_active_display_len(uint16_t host_idx, uint16_t nth);
 
 // === Layout constants ===
 static const CGFloat kSidebarWidth    = 220.0;
@@ -207,11 +215,11 @@ static NSColor* colorFromU32(uint32_t c, NSColor* def) {
 @property (nonatomic) int selEndRow;
 @property (nonatomic) BOOL isDragging;
 // Command palette (Cmd+K)
-// paletteMode: 0 = commands list, 1 = theme picker (with live preview)
+// paletteMode: 0 = commands list, 1 = theme picker (with live preview), 2 = add SSH host
 // When entering theme mode, g_savedTheme is set so we can revert on cancel.
 @property (nonatomic) BOOL paletteVisible;
 @property (nonatomic) NSInteger paletteSelection;  // selected row (command idx or theme idx)
-@property (nonatomic) NSInteger paletteMode;        // 0 = commands, 1 = themes
+@property (nonatomic) NSInteger paletteMode;        // 0 = commands, 1 = themes, 2 = add SSH host
 @property (nonatomic) NSInteger themeScroll;         // scroll offset for theme list (25 themes, 12 visible)
 @property (nonatomic, strong) NSMutableString* paletteSearchText;
 @end
@@ -277,6 +285,9 @@ static NSString* const kPaletteHints[] = {
         self.paletteMode = 0;
         self.themeScroll = 0;
         self.paletteSearchText = [NSMutableString string];
+
+        // Register for file drag-and-drop
+        [self registerForDraggedTypes:@[NSPasteboardTypeFileURL]];
     }
     return self;
 }
@@ -389,6 +400,9 @@ static NSString* const kPaletteHints[] = {
     CGFloat y = headerBottom;
 
     for (uint16_t i = 0; i < count; i++) {
+        // Skip SSH sessions — they show under REMOTE
+        if (bridge_is_ssh_session(i)) continue;
+
         uint8_t sel = bridge_is_session_selected(i);
         uint8_t att = bridge_is_session_attached(i);
         NSRect rowRect = NSMakeRect(0, y, sw - 1, kSessionRowH);
@@ -462,9 +476,9 @@ static NSString* const kPaletteHints[] = {
     [btnText drawAtPoint:NSMakePoint(btnTextX, btnTextY) withAttributes:btnAttrs];
     y = btnY + kNewBtnHeight;
 
-    // SSH Remote section
+    // SSH Remote section (always shown)
     uint16_t sshCount = bridge_get_ssh_host_count();
-    if (sshCount > 0) {
+    {
         [g_border setFill];
         NSRectFill(NSMakeRect(0, y, sw, 1));
         [@"REMOTE" drawAtPoint:NSMakePoint(kSidebarPadH, y + 8) withAttributes:headerAttrs];
@@ -532,46 +546,117 @@ static NSString* const kPaletteHints[] = {
             };
             [hostName drawAtPoint:NSMakePoint(kSidebarPadH + 14, y + (kSessionRowH - 16) / 2) withAttributes:hostNameAttrs];
 
+            // × remove button for manual hosts on hover
+            if (self.hoveredSshHost == hi && bridge_is_ssh_host_manual(hi)) {
+                NSDictionary* closeAttrs = @{
+                    NSFontAttributeName: [NSFont systemFontOfSize:14 weight:NSFontWeightLight],
+                    NSForegroundColorAttributeName: g_textMuted,
+                };
+                [@"\u00D7" drawAtPoint:NSMakePoint(sw - 28, y + (kSessionRowH - 16) / 2) withAttributes:closeAttrs];
+            }
+
             y += kSessionRowH;
 
             // Draw remote sessions if expanded
             if (expanded && status == 2) {
+                // Active local SSH sessions for this host
+                uint16_t activeCount = bridge_get_ssh_active_count(hi);
+                for (uint16_t ai = 0; ai < activeCount; ai++) {
+                    if (y + kRecentRowH > h) break;
+
+                    uint16_t sessIdx = bridge_get_ssh_active_session_idx(hi, ai);
+                    uint8_t isSel = (sessIdx != 0xFFFF) ? bridge_is_session_selected(sessIdx) : 0;
+
+                    NSRect sessRect = NSMakeRect(0, y, sw - 1, kRecentRowH);
+                    // Encode active sessions with offset: hi * 100 + 50 + ai
+                    NSInteger encodedActive = hi * 100 + 50 + ai;
+                    if (isSel) {
+                        [g_selectedBg setFill];
+                        NSRectFill(sessRect);
+                        [g_accent setFill];
+                        NSRectFill(NSMakeRect(0, y + 3, kAccentBarW, kRecentRowH - 6));
+                    } else if (self.hoveredSshSession == encodedActive) {
+                        [g_hoverBg setFill];
+                        NSRectFill(sessRect);
+                    }
+
+                    // Green dot for active
+                    NSBezierPath* activeDot = [NSBezierPath bezierPathWithOvalInRect:
+                        NSMakeRect(kSidebarPadH + 14, y + (kRecentRowH - 5) / 2, 5, 5)];
+                    [g_green setFill];
+                    [activeDot fill];
+
+                    uint16_t dLen = bridge_get_ssh_active_display_len(hi, ai);
+                    const uint8_t* dPtr = bridge_get_ssh_active_display(hi, ai);
+                    NSString* dName = [[NSString alloc] initWithBytes:dPtr length:dLen encoding:NSUTF8StringEncoding];
+                    if (!dName) dName = @"?";
+
+                    NSDictionary* activeAttrs = @{
+                        NSFontAttributeName: isSel ? self.uiFontBold : self.uiFont,
+                        NSForegroundColorAttributeName: isSel ? g_text : g_textDim,
+                    };
+                    [dName drawAtPoint:NSMakePoint(kSidebarPadH + 26, y + (kRecentRowH - 14) / 2) withAttributes:activeAttrs];
+                    y += kRecentRowH;
+                }
+
+                // Remote tmux sessions (from SSH probe)
                 uint16_t sessCount = bridge_get_ssh_session_count(hi);
-                if (sessCount == 0) {
-                    // Show "No tmux sessions" hint
+                for (uint16_t si = 0; si < sessCount; si++) {
+                    if (y + kRecentRowH > h) break;
+
+                    NSRect sessRect = NSMakeRect(0, y, sw - 1, kRecentRowH);
+                    NSInteger encodedSess = hi * 100 + si;
+                    if (self.hoveredSshSession == encodedSess) {
+                        [g_hoverBg setFill];
+                        NSRectFill(sessRect);
+                    }
+
+                    uint16_t sNameLen = bridge_get_ssh_session_name_len(hi, si);
+                    const uint8_t* sNamePtr = bridge_get_ssh_session_name(hi, si);
+                    NSString* sessName = [[NSString alloc] initWithBytes:sNamePtr length:sNameLen encoding:NSUTF8StringEncoding];
+                    if (!sessName) sessName = @"?";
+
+                    NSDictionary* sessAttrs = @{
+                        NSFontAttributeName: self.uiFont,
+                        NSForegroundColorAttributeName: g_textMuted,
+                    };
+                    // Indented under host — dimmer since not yet connected
+                    [sessName drawAtPoint:NSMakePoint(kSidebarPadH + 26, y + (kRecentRowH - 14) / 2) withAttributes:sessAttrs];
+                    y += kRecentRowH;
+                }
+
+                // "No sessions" hint if nothing at all
+                if (activeCount == 0 && sessCount == 0) {
                     NSDictionary* emptyAttrs = @{
                         NSFontAttributeName: self.uiFont,
                         NSForegroundColorAttributeName: g_textMuted,
                     };
-                    [@"  No tmux sessions" drawAtPoint:NSMakePoint(kSidebarPadH + 14, y + (kRecentRowH - 14) / 2) withAttributes:emptyAttrs];
+                    [@"  No sessions" drawAtPoint:NSMakePoint(kSidebarPadH + 14, y + (kRecentRowH - 14) / 2) withAttributes:emptyAttrs];
                     y += kRecentRowH;
-                } else {
-                    for (uint16_t si = 0; si < sessCount; si++) {
-                        if (y + kRecentRowH > h) break;
+                }
 
-                        NSRect sessRect = NSMakeRect(0, y, sw - 1, kRecentRowH);
-                        NSInteger encodedSess = hi * 100 + si;
-                        if (self.hoveredSshSession == encodedSess) {
-                            [g_hoverBg setFill];
-                            NSRectFill(sessRect);
-                        }
-
-                        uint16_t sNameLen = bridge_get_ssh_session_name_len(hi, si);
-                        const uint8_t* sNamePtr = bridge_get_ssh_session_name(hi, si);
-                        NSString* sessName = [[NSString alloc] initWithBytes:sNamePtr length:sNameLen encoding:NSUTF8StringEncoding];
-                        if (!sessName) sessName = @"?";
-
-                        NSDictionary* sessAttrs = @{
-                            NSFontAttributeName: self.uiFont,
-                            NSForegroundColorAttributeName: g_textDim,
-                        };
-                        // Indented under host
-                        [sessName drawAtPoint:NSMakePoint(kSidebarPadH + 26, y + (kRecentRowH - 14) / 2) withAttributes:sessAttrs];
-                        y += kRecentRowH;
-                    }
+                // "+ New Session" row
+                if (y + kRecentRowH <= h) {
+                    NSDictionary* newSessAttrs = @{
+                        NSFontAttributeName: self.uiFont,
+                        NSForegroundColorAttributeName: g_textMuted,
+                    };
+                    [@"  + New Session" drawAtPoint:NSMakePoint(kSidebarPadH + 14, y + (kRecentRowH - 14) / 2) withAttributes:newSessAttrs];
+                    y += kRecentRowH;
                 }
             }
         }
+
+        // "+ Add Host" button
+        [g_border setFill];
+        NSRectFill(NSMakeRect(0, y, sw, 1));
+        CGFloat addHostBtnY = y;
+        NSString* addHostText = @"+ Add Host";
+        CGSize addHostSz = [addHostText sizeWithAttributes:btnAttrs];
+        CGFloat addHostTextX = (sw - addHostSz.width) / 2;
+        CGFloat addHostTextY = y + (kNewBtnHeight * 0.7 - addHostSz.height) / 2;
+        [addHostText drawAtPoint:NSMakePoint(addHostTextX, addHostTextY) withAttributes:btnAttrs];
+        y += kNewBtnHeight * 0.7;
     }
 
     // Recent Projects section (always shown)
@@ -690,6 +775,49 @@ static NSString* const kPaletteHints[] = {
     NSRectFill(NSMakeRect(inputX + 10 + cursorTextW, inputY + 6, 1.5, inputH - 12));
 }
 
+- (void)drawAddHostInput {
+    CGFloat w = self.bounds.size.width;
+    CGFloat h = self.bounds.size.height;
+
+    CGFloat cardW = 360;
+    CGFloat headerH = 44;
+    CGFloat hintH = 28;
+    CGFloat cardH = headerH + hintH + 12;
+    CGFloat cardX = (w - cardW) / 2;
+    CGFloat cardY = h * 0.2;
+
+    // Shadow
+    NSShadow* shadow = [[NSShadow alloc] init];
+    shadow.shadowColor = [NSColor colorWithWhite:0 alpha:0.6];
+    shadow.shadowOffset = NSMakeSize(0, -4);
+    shadow.shadowBlurRadius = 24;
+
+    [NSGraphicsContext saveGraphicsState];
+    [shadow set];
+    NSBezierPath* cardPath = [NSBezierPath bezierPathWithRoundedRect:
+        NSMakeRect(cardX, cardY, cardW, cardH) xRadius:12 yRadius:12];
+    [g_sidebarBg setFill];
+    [cardPath fill];
+    [NSGraphicsContext restoreGraphicsState];
+
+    [g_border setStroke];
+    cardPath.lineWidth = 1;
+    [cardPath stroke];
+
+    // Search bar as input field
+    [self drawPaletteSearchBar:cardX y:cardY w:cardW placeholder:@"user@hostname or host:port" leftInset:14];
+
+    [g_border setFill];
+    NSRectFill(NSMakeRect(cardX, cardY + headerH, cardW, 1));
+
+    // Hint text
+    NSDictionary* hintAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightRegular],
+        NSForegroundColorAttributeName: g_textMuted,
+    };
+    [@"Press Enter to add \u00B7 Escape to cancel" drawAtPoint:NSMakePoint(cardX + 14, cardY + headerH + 8) withAttributes:hintAttrs];
+}
+
 - (void)drawPalette {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
@@ -699,6 +827,10 @@ static NSString* const kPaletteHints[] = {
 
     if (self.paletteMode == 1) {
         [self drawThemePicker];
+        return;
+    }
+    if (self.paletteMode == 2) {
+        [self drawAddHostInput];
         return;
     }
 
@@ -1123,6 +1255,26 @@ static NSString* const kPaletteHints[] = {
         CGFloat w = self.bounds.size.width;
         CGFloat h = self.bounds.size.height;
 
+        if (self.paletteMode == 2) {
+            // Add SSH host mode — click inside card absorbs, click outside dismisses
+            CGFloat cardW = 360;
+            CGFloat headerH = 44;
+            CGFloat hintH = 28;
+            CGFloat cardH = headerH + hintH + 12;
+            CGFloat cardX = (w - cardW) / 2;
+            CGFloat cardY = h * 0.2;
+            if (p.x >= cardX && p.x <= cardX + cardW &&
+                p.y >= cardY && p.y <= cardY + cardH) {
+                return; // absorb click inside card
+            }
+            // Click outside — dismiss
+            self.paletteVisible = NO;
+            self.paletteMode = 0;
+            [self.paletteSearchText setString:@""];
+            [self setNeedsDisplay:YES];
+            return;
+        }
+
         if (self.paletteMode == 1) {
             // Theme picker mode
             int filteredIndices[25];
@@ -1274,40 +1426,35 @@ static NSString* const kPaletteHints[] = {
 
     if (bridge_is_sidebar_visible() && p.x < kSidebarWidth) {
         uint16_t count = bridge_get_session_count();
-        CGFloat sessionsEnd = listTop + count * kSessionRowH;
-        CGFloat btnEnd = sessionsEnd + kNewBtnHeight;
 
-        // Session click
-        if (p.y >= listTop && p.y < sessionsEnd) {
-            uint16_t idx = (uint16_t)((p.y - listTop) / kSessionRowH);
-            if (idx < count) {
+        // Walk session rows, skipping SSH sessions (matching drawSidebar layout)
+        CGFloat rowY = listTop;
+        for (uint16_t i = 0; i < count; i++) {
+            if (bridge_is_ssh_session(i)) continue;
+            if (p.y >= rowY && p.y < rowY + kSessionRowH) {
                 // Close button hit (right 28px of row)
                 if (p.x >= kSidebarWidth - 28) {
-                    if (self.closeArmedSession == idx) {
-                        // Second click — actually delete
+                    if (self.closeArmedSession == i) {
                         self.closeArmedSession = -1;
-                        bridge_kill_session(idx);
+                        bridge_kill_session(i);
                     } else {
-                        // First click — arm (turns red)
-                        self.closeArmedSession = idx;
+                        self.closeArmedSession = i;
                         [self setNeedsDisplay:YES];
                     }
                     return;
                 }
-
-                // Double-click to rename
                 if (event.clickCount == 2) {
-                    [self promptRenameSession:idx];
+                    [self promptRenameSession:i];
                     return;
                 }
-
-                // Clicking elsewhere disarms the close button
                 self.closeArmedSession = -1;
-
-                bridge_select_session(idx);
+                bridge_select_session(i);
+                return;
             }
-            return;
+            rowY += kSessionRowH;
         }
+        CGFloat sessionsEnd = rowY;
+        CGFloat btnEnd = sessionsEnd + kNewBtnHeight;
 
         // "+ New Session" button
         if (p.y >= sessionsEnd && p.y < btnEnd) {
@@ -1318,7 +1465,7 @@ static NSString* const kPaletteHints[] = {
         // Compute SSH section layout (same flow as drawSidebar)
         CGFloat sshY = btnEnd;
         uint16_t sshCount = bridge_get_ssh_host_count();
-        if (sshCount > 0) {
+        {
             CGFloat sshHeaderEnd = sshY + kRecentHeaderH; // REMOTE header
             if (p.y >= sshY && p.y < sshHeaderEnd) {
                 return; // click on header, ignore
@@ -1330,30 +1477,65 @@ static NSString* const kPaletteHints[] = {
 
                 // Host row
                 if (p.y >= sshItemY && p.y < sshItemY + kSessionRowH) {
+                    // × remove button for manual hosts (right 28px)
+                    if (p.x >= kSidebarWidth - 28 && bridge_is_ssh_host_manual(hi)) {
+                        bridge_remove_ssh_host(hi);
+                        [self setNeedsDisplay:YES];
+                        return;
+                    }
                     bridge_toggle_ssh_host(hi);
                     [self setNeedsDisplay:YES];
                     return;
                 }
                 sshItemY += kSessionRowH;
 
-                // Remote sessions under expanded host
+                // Sessions under expanded host
                 if (expanded && status == 2) {
-                    uint16_t sessCount = bridge_get_ssh_session_count(hi);
-                    if (sessCount == 0) {
-                        sshItemY += kRecentRowH; // "No tmux sessions" row
-                    } else {
-                        for (uint16_t si = 0; si < sessCount; si++) {
-                            if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
-                                bridge_select_ssh_session(hi, si);
-                                [self setNeedsDisplay:YES];
-                                return;
-                            }
-                            sshItemY += kRecentRowH;
+                    // Active local SSH sessions
+                    uint16_t activeCount = bridge_get_ssh_active_count(hi);
+                    for (uint16_t ai = 0; ai < activeCount; ai++) {
+                        if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
+                            uint16_t sessIdx = bridge_get_ssh_active_session_idx(hi, ai);
+                            if (sessIdx != 0xFFFF) bridge_select_session(sessIdx);
+                            [self setNeedsDisplay:YES];
+                            return;
                         }
+                        sshItemY += kRecentRowH;
                     }
+
+                    // Remote tmux sessions (from probe)
+                    uint16_t sessCount = bridge_get_ssh_session_count(hi);
+                    for (uint16_t si = 0; si < sessCount; si++) {
+                        if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
+                            bridge_select_ssh_session(hi, si);
+                            [self setNeedsDisplay:YES];
+                            return;
+                        }
+                        sshItemY += kRecentRowH;
+                    }
+
+                    // "No sessions" placeholder
+                    if (activeCount == 0 && sessCount == 0) {
+                        sshItemY += kRecentRowH;
+                    }
+
+                    // "+ New Session" row
+                    if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
+                        bridge_create_ssh_shell(hi);
+                        [self setNeedsDisplay:YES];
+                        return;
+                    }
+                    sshItemY += kRecentRowH;
                 }
             }
-            sshY = sshItemY;
+
+            // "+ Add Host" button
+            CGFloat addHostBtnH = kNewBtnHeight * 0.7;
+            if (p.y >= sshItemY && p.y < sshItemY + addHostBtnH) {
+                [self promptAddSshHost];
+                return;
+            }
+            sshY = sshItemY + addHostBtnH;
         }
 
         // Recent projects click (after SSH section)
@@ -1423,13 +1605,14 @@ static NSString* const kPaletteHints[] = {
 
     if (bridge_is_sidebar_visible() && p.x < kSidebarWidth && p.y >= listTop) {
         uint16_t count = bridge_get_session_count();
-        CGFloat sessionsEnd = listTop + count * kSessionRowH;
-        if (p.y < sessionsEnd) {
-            uint16_t idx = (uint16_t)((p.y - listTop) / kSessionRowH);
-            if (idx < count) {
-                [self showContextMenuForSession:idx event:event];
+        CGFloat rowY = listTop;
+        for (uint16_t i = 0; i < count; i++) {
+            if (bridge_is_ssh_session(i)) continue;
+            if (p.y >= rowY && p.y < rowY + kSessionRowH) {
+                [self showContextMenuForSession:i event:event];
                 return;
             }
+            rowY += kSessionRowH;
         }
     }
     [super rightMouseDown:event];
@@ -1494,6 +1677,54 @@ static NSString* const kPaletteHints[] = {
     [self.window makeFirstResponder:self];
 }
 
+- (void)promptAddSshHost {
+    // Open the palette in "add SSH host" mode
+    self.paletteVisible = YES;
+    self.paletteMode = 2;
+    self.paletteSelection = 0;
+    [self.paletteSearchText setString:@""];
+    [self setNeedsDisplay:YES];
+}
+
+// === Drag and Drop ===
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    NSPasteboard* pb = [sender draggingPasteboard];
+    if ([pb canReadObjectForClasses:@[[NSURL class]] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}]) {
+        return NSDragOperationCopy;
+    }
+    return NSDragOperationNone;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    NSPasteboard* pb = [sender draggingPasteboard];
+    NSArray<NSURL*>* urls = [pb readObjectsForClasses:@[[NSURL class]]
+                                              options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    if (!urls || urls.count == 0) return NO;
+
+    NSMutableArray<NSString*>* paths = [NSMutableArray array];
+    for (NSURL* url in urls) {
+        NSString* path = url.path;
+        if (path) {
+            // Shell-escape spaces and special characters
+            path = [path stringByReplacingOccurrencesOfString:@"\\" withString:@"\\\\"];
+            path = [path stringByReplacingOccurrencesOfString:@" " withString:@"\\ "];
+            path = [path stringByReplacingOccurrencesOfString:@"'" withString:@"\\'"];
+            path = [path stringByReplacingOccurrencesOfString:@"\"" withString:@"\\\""];
+            path = [path stringByReplacingOccurrencesOfString:@"(" withString:@"\\("];
+            path = [path stringByReplacingOccurrencesOfString:@")" withString:@"\\)"];
+            [paths addObject:path];
+        }
+    }
+
+    NSString* combined = [paths componentsJoinedByString:@" "];
+    if (combined.length > 0) {
+        const char* utf8 = [combined UTF8String];
+        if (utf8) {
+            bridge_key_input((const uint8_t*)utf8, (uint32_t)strlen(utf8));
+        }
+    }
+    return YES;
+}
 
 
 - (void)mouseMoved:(NSEvent*)event {
@@ -1524,7 +1755,7 @@ static NSString* const kPaletteHints[] = {
                     [self setNeedsDisplay:YES];
                 }
             }
-        } else {
+        } else if (self.paletteMode == 0) {
             // Commands hover
             int filteredIndices[9];
             int filteredCount = [self getFilteredCommandIndices:filteredIndices];
@@ -1585,19 +1816,26 @@ static NSString* const kPaletteHints[] = {
 
     if (bridge_is_sidebar_visible() && p.x < kSidebarWidth && p.y >= listTop) {
         uint16_t count = bridge_get_session_count();
-        CGFloat sessionsEnd = listTop + count * kSessionRowH;
+
+        // Walk session rows, skipping SSH sessions (matching drawSidebar layout)
+        CGFloat rowY = listTop;
+        for (uint16_t i = 0; i < count; i++) {
+            if (bridge_is_ssh_session(i)) continue;
+            if (p.y >= rowY && p.y < rowY + kSessionRowH) {
+                self.hoveredSession = i;
+                break;
+            }
+            rowY += kSessionRowH;
+        }
+        CGFloat sessionsEnd = rowY;
         CGFloat btnEnd = sessionsEnd + kNewBtnHeight;
 
-        if (p.y < sessionsEnd) {
-            // Hovering over sessions
-            NSInteger idx = (NSInteger)((p.y - listTop) / kSessionRowH);
-            if (idx < count) self.hoveredSession = idx;
-        } else {
+        if (p.y >= btnEnd) {
             // Walk SSH section layout to determine hover
             CGFloat sshY = btnEnd;
             uint16_t sshCount = bridge_get_ssh_host_count();
             BOOL inSsh = NO;
-            if (sshCount > 0) {
+            {
                 CGFloat sshItemY = sshY + kRecentHeaderH; // after REMOTE header
                 for (uint16_t hi = 0; hi < sshCount; hi++) {
                     uint8_t status = bridge_get_ssh_host_status(hi);
@@ -1610,23 +1848,39 @@ static NSString* const kPaletteHints[] = {
                     }
                     sshItemY += kSessionRowH;
                     if (expanded && status == 2) {
-                        uint16_t sessCount = bridge_get_ssh_session_count(hi);
-                        if (sessCount == 0) {
-                            sshItemY += kRecentRowH;
-                        } else {
-                            for (uint16_t si = 0; si < sessCount; si++) {
-                                if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
-                                    self.hoveredSshSession = hi * 100 + si;
-                                    inSsh = YES;
-                                    break;
-                                }
-                                sshItemY += kRecentRowH;
+                        // Active local SSH sessions
+                        uint16_t activeCount = bridge_get_ssh_active_count(hi);
+                        for (uint16_t ai = 0; ai < activeCount; ai++) {
+                            if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
+                                self.hoveredSshSession = hi * 100 + 50 + ai;
+                                inSsh = YES;
+                                break;
                             }
-                            if (inSsh) break;
+                            sshItemY += kRecentRowH;
                         }
+                        if (inSsh) break;
+
+                        // Remote tmux sessions
+                        uint16_t sessCount = bridge_get_ssh_session_count(hi);
+                        for (uint16_t si = 0; si < sessCount; si++) {
+                            if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
+                                self.hoveredSshSession = hi * 100 + si;
+                                inSsh = YES;
+                                break;
+                            }
+                            sshItemY += kRecentRowH;
+                        }
+                        if (inSsh) break;
+
+                        // "No sessions" placeholder
+                        if (activeCount == 0 && sessCount == 0) {
+                            sshItemY += kRecentRowH;
+                        }
+
+                        sshItemY += kRecentRowH; // "+ New Session" row
                     }
                 }
-                sshY = sshItemY;
+                sshY = sshItemY + kNewBtnHeight * 0.7; // + Add Host button
             }
             // Check recent projects area (after SSH section)
             if (!inSsh) {
@@ -1761,6 +2015,48 @@ static NSString* const kPaletteHints[] = {
     // Theme mode uses live preview: up/down calls applyTheme() immediately,
     // Enter confirms (theme already applied), Escape reverts to g_savedTheme.
     if (self.paletteVisible) {
+        if (self.paletteMode == 2) {
+            // Add SSH host mode: type host string, Enter to add, Escape to cancel
+            switch (event.keyCode) {
+                case 36: { // Enter — add the host
+                    if (self.paletteSearchText.length > 0) {
+                        const char* utf8 = [self.paletteSearchText UTF8String];
+                        bridge_add_ssh_host((const uint8_t*)utf8, (uint16_t)strlen(utf8));
+                    }
+                    self.paletteVisible = NO;
+                    self.paletteMode = 0;
+                    [self.paletteSearchText setString:@""];
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+                case 53: { // Escape — cancel
+                    self.paletteVisible = NO;
+                    self.paletteMode = 0;
+                    [self.paletteSearchText setString:@""];
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+                case 51: { // Backspace
+                    if (self.paletteSearchText.length > 0) {
+                        [self.paletteSearchText deleteCharactersInRange:
+                            NSMakeRange(self.paletteSearchText.length - 1, 1)];
+                        [self setNeedsDisplay:YES];
+                    }
+                    return;
+                }
+                default: {
+                    NSString* chars = event.characters;
+                    if (chars.length > 0) {
+                        unichar ch = [chars characterAtIndex:0];
+                        if (ch >= 0x20 && ch < 0x7F) {
+                            [self.paletteSearchText appendString:chars];
+                            [self setNeedsDisplay:YES];
+                        }
+                    }
+                    return;
+                }
+            }
+        }
         if (self.paletteMode == 1) {
             // Theme picker: navigate + live preview + search
             int filteredIndices[25];

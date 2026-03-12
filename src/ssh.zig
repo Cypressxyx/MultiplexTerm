@@ -178,6 +178,56 @@ pub fn listRemoteSessions(allocator: std.mem.Allocator, host_name: []const u8, o
     return count;
 }
 
+/// Parse a host string like "host", "user@host", or "user@host:port" into an SshHost.
+pub fn parseHostString(input: []const u8, out: *SshHost) bool {
+    if (input.len == 0) return false;
+    out.* = .{};
+
+    var remaining = input;
+    var user: ?[]const u8 = null;
+
+    // Check for user@
+    if (std.mem.indexOfScalar(u8, remaining, '@')) |at_pos| {
+        user = remaining[0..at_pos];
+        remaining = remaining[at_pos + 1 ..];
+    }
+
+    // Check for :port
+    var host_part = remaining;
+    var port: u16 = 22;
+    if (std.mem.lastIndexOfScalar(u8, remaining, ':')) |colon_pos| {
+        const port_str = remaining[colon_pos + 1 ..];
+        if (std.fmt.parseInt(u16, port_str, 10)) |p| {
+            port = p;
+            host_part = remaining[0..colon_pos];
+        } else |_| {
+            // Not a valid port, treat whole thing as hostname
+        }
+    }
+
+    if (host_part.len == 0) return false;
+
+    // Set name = full input (for display)
+    const nlen = @min(input.len, 64);
+    @memcpy(out.name[0..nlen], input[0..nlen]);
+    out.name_len = @intCast(nlen);
+
+    // Set hostname
+    const hlen = @min(host_part.len, 256);
+    @memcpy(out.hostname[0..hlen], host_part[0..hlen]);
+    out.hostname_len = @intCast(hlen);
+
+    // Set user if present
+    if (user) |u| {
+        const ulen = @min(u.len, 64);
+        @memcpy(out.user[0..ulen], u[0..ulen]);
+        out.user_len = @intCast(ulen);
+    }
+
+    out.port = port;
+    return true;
+}
+
 // --- Tests ---
 
 test "parseSshConfig basic" {
@@ -192,6 +242,29 @@ test "hasWildcard" {
     try std.testing.expect(hasWildcard("host?"));
     try std.testing.expect(!hasWildcard("myhost"));
     try std.testing.expect(!hasWildcard("dev-server"));
+}
+
+test "parseHostString" {
+    var host: SshHost = undefined;
+
+    try std.testing.expect(parseHostString("myserver", &host));
+    try std.testing.expectEqualStrings("myserver", host.name[0..host.name_len]);
+    try std.testing.expectEqualStrings("myserver", host.hostname[0..host.hostname_len]);
+    try std.testing.expectEqual(@as(u8, 0), host.user_len);
+    try std.testing.expectEqual(@as(u16, 22), host.port);
+
+    try std.testing.expect(parseHostString("admin@10.0.0.1", &host));
+    try std.testing.expectEqualStrings("admin@10.0.0.1", host.name[0..host.name_len]);
+    try std.testing.expectEqualStrings("10.0.0.1", host.hostname[0..host.hostname_len]);
+    try std.testing.expectEqualStrings("admin", host.user[0..host.user_len]);
+    try std.testing.expectEqual(@as(u16, 22), host.port);
+
+    try std.testing.expect(parseHostString("root@server:2222", &host));
+    try std.testing.expectEqualStrings("server", host.hostname[0..host.hostname_len]);
+    try std.testing.expectEqualStrings("root", host.user[0..host.user_len]);
+    try std.testing.expectEqual(@as(u16, 2222), host.port);
+
+    try std.testing.expect(!parseHostString("", &host));
 }
 
 test "startsWithIgnoreCase" {
