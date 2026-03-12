@@ -65,6 +65,7 @@ export fn bridge_init() callconv(.c) u8 {
     g_tmux = tmux;
 
     g_state = AppState.init(g_allocator);
+    loadRecentProjects();
     // Engine and PTY created with real size in bridge_resize (first call)
     return 0;
 }
@@ -338,6 +339,16 @@ const MAX_DISPLAY = 64;
 var g_display_bufs: [MAX_SESSIONS][MAX_DISPLAY]u8 = undefined;
 var g_display_lens: [MAX_SESSIONS]u16 = [_]u16{0} ** MAX_SESSIONS;
 
+// --- Recent projects ---
+const MAX_RECENT = 10;
+const MAX_PATH_LEN = 256;
+var g_recent_paths: [MAX_RECENT][MAX_PATH_LEN]u8 = undefined;
+var g_recent_path_lens: [MAX_RECENT]u16 = [_]u16{0} ** MAX_RECENT;
+var g_recent_display: [MAX_RECENT][MAX_DISPLAY]u8 = undefined;
+var g_recent_display_lens: [MAX_RECENT]u16 = [_]u16{0} ** MAX_RECENT;
+var g_recent_count: u16 = 0;
+var g_recent_dirty: bool = false;
+
 export fn bridge_get_session_display_name(idx: u16) callconv(.c) [*]const u8 {
     if (idx < MAX_SESSIONS and g_display_lens[idx] > 0)
         return &g_display_bufs[idx];
@@ -371,7 +382,7 @@ fn computeDisplayName(session: *const state_mod.Session) []const u8 {
     const cmd = session.active_command;
 
     // If running a notable app, show its pretty name
-    if (cmd.len > 0 and !isShell(cmd)) {
+    if (cmd.len > 0 and !isShell(cmd) and !isVersionString(cmd)) {
         if (prettyName(cmd)) |pretty| return pretty;
         return cmd; // unknown app — show raw command name
     }
@@ -420,6 +431,22 @@ fn allDigits(s: []const u8) bool {
         if (c < '0' or c > '9') return false;
     }
     return true;
+}
+
+/// Returns true if cmd looks like a version string (e.g. "2.1.74").
+/// Some apps (e.g. Claude Code) set their process title to their version,
+/// which tmux reports as pane_current_command.
+fn isVersionString(cmd: []const u8) bool {
+    if (cmd.len == 0) return false;
+    var has_dot = false;
+    for (cmd) |c| {
+        if (c == '.') {
+            has_dot = true;
+        } else if (c < '0' or c > '9') {
+            return false;
+        }
+    }
+    return has_dot;
 }
 
 fn isShell(cmd: []const u8) bool {
@@ -481,6 +508,173 @@ fn prettyName(cmd: []const u8) ?[]const u8 {
         if (std.mem.eql(u8, cmd, e.k)) return e.v;
     }
     return null;
+}
+
+// --- Recent projects FFI ---
+
+export fn bridge_get_recent_project_count() callconv(.c) u16 {
+    return g_recent_count;
+}
+
+export fn bridge_get_recent_project_display(idx: u16) callconv(.c) [*]const u8 {
+    if (idx < g_recent_count and g_recent_display_lens[idx] > 0)
+        return &g_recent_display[idx];
+    return "".ptr;
+}
+
+export fn bridge_get_recent_project_display_len(idx: u16) callconv(.c) u16 {
+    if (idx < g_recent_count) return g_recent_display_lens[idx];
+    return 0;
+}
+
+export fn bridge_get_recent_project_path(idx: u16) callconv(.c) [*]const u8 {
+    if (idx < g_recent_count and g_recent_path_lens[idx] > 0)
+        return &g_recent_paths[idx];
+    return "".ptr;
+}
+
+export fn bridge_get_recent_project_path_len(idx: u16) callconv(.c) u16 {
+    if (idx < g_recent_count) return g_recent_path_lens[idx];
+    return 0;
+}
+
+export fn bridge_create_session_in_dir(path_ptr: [*]const u8, path_len: u16) callconv(.c) void {
+    const path = path_ptr[0..path_len];
+    const dir = std.fs.path.basename(path);
+    const tmux = &(g_tmux orelse return);
+    const state = &(g_state orelse return);
+
+    if (!g_started) {
+        // Set session name from dir and start PTY
+        var name = dir;
+        if (name.len == 0) name = "mterm";
+        const nlen = @min(name.len, g_session_name_buf.len - 1);
+        @memcpy(g_session_name_buf[0..nlen], name[0..nlen]);
+        g_session_name_buf[nlen] = 0;
+        std.posix.chdir(path) catch {};
+        startPty(g_initial_cols, g_initial_rows);
+        return;
+    }
+
+    // Derive unique session name
+    var name_buf: [64]u8 = undefined;
+    const base = if (dir.len > 0) dir else "mterm";
+    const count = state.sessions.items.len;
+    const name = if (count == 0)
+        std.fmt.bufPrint(&name_buf, "{s}", .{base}) catch return
+    else
+        std.fmt.bufPrint(&name_buf, "{s}-{d}", .{ base, count }) catch return;
+
+    tmux.createSessionInDir(name, path) catch {};
+    syncState();
+    g_redraw = true;
+}
+
+fn recentProjectsPath() ?[]const u8 {
+    const home = std.posix.getenv("HOME") orelse return null;
+    var buf: [512]u8 = undefined;
+    const path = std.fmt.bufPrint(&buf, "{s}/.mterm/recent_projects", .{home}) catch return null;
+    return path;
+}
+
+fn loadRecentProjects() void {
+    const rp_path = recentProjectsPath() orelse return;
+    const file = std.fs.cwd().openFile(rp_path, .{}) catch return;
+    defer file.close();
+
+    var buf: [4096]u8 = undefined;
+    const n = file.readAll(&buf) catch return;
+    var lines = std.mem.splitScalar(u8, buf[0..n], '\n');
+    g_recent_count = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0) continue;
+        if (g_recent_count >= MAX_RECENT) break;
+        const plen: u16 = @intCast(@min(line.len, MAX_PATH_LEN));
+        @memcpy(g_recent_paths[g_recent_count][0..plen], line[0..plen]);
+        g_recent_path_lens[g_recent_count] = plen;
+        // Display name = basename
+        const display = std.fs.path.basename(line);
+        const dlen: u16 = @intCast(@min(display.len, MAX_DISPLAY));
+        @memcpy(g_recent_display[g_recent_count][0..dlen], display[0..dlen]);
+        g_recent_display_lens[g_recent_count] = dlen;
+        g_recent_count += 1;
+    }
+}
+
+fn saveRecentProjects() void {
+    const rp_path = recentProjectsPath() orelse return;
+    // Ensure ~/.mterm/ exists
+    const home = std.posix.getenv("HOME") orelse return;
+    var dir_buf: [512]u8 = undefined;
+    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.mterm", .{home}) catch return;
+    std.fs.cwd().makeDir(dir_path) catch |err| {
+        if (err != error.PathAlreadyExists) return;
+    };
+
+    const file = std.fs.cwd().createFile(rp_path, .{ .truncate = true }) catch return;
+    defer file.close();
+    var i: u16 = 0;
+    while (i < g_recent_count) : (i += 1) {
+        const plen = g_recent_path_lens[i];
+        if (plen > 0) {
+            file.writeAll(g_recent_paths[i][0..plen]) catch {};
+            file.writeAll("\n") catch {};
+        }
+    }
+}
+
+fn addRecentProject(path: []const u8) void {
+    if (path.len == 0) return;
+    // Skip root and home itself
+    const home = std.posix.getenv("HOME") orelse "";
+    if (std.mem.eql(u8, path, "/")) return;
+    if (std.mem.eql(u8, path, home)) return;
+
+    // Check for duplicate — if found, move to top
+    var i: u16 = 0;
+    while (i < g_recent_count) : (i += 1) {
+        const existing = g_recent_paths[i][0..g_recent_path_lens[i]];
+        if (std.mem.eql(u8, existing, path)) {
+            // Move to top by shifting everything down
+            if (i > 0) {
+                var j = i;
+                while (j > 0) : (j -= 1) {
+                    g_recent_paths[j] = g_recent_paths[j - 1];
+                    g_recent_path_lens[j] = g_recent_path_lens[j - 1];
+                    g_recent_display[j] = g_recent_display[j - 1];
+                    g_recent_display_lens[j] = g_recent_display_lens[j - 1];
+                }
+                // Write path to slot 0
+                const plen: u16 = @intCast(@min(path.len, MAX_PATH_LEN));
+                @memcpy(g_recent_paths[0][0..plen], path[0..plen]);
+                g_recent_path_lens[0] = plen;
+                const display = std.fs.path.basename(path);
+                const dlen: u16 = @intCast(@min(display.len, MAX_DISPLAY));
+                @memcpy(g_recent_display[0][0..dlen], display[0..dlen]);
+                g_recent_display_lens[0] = dlen;
+                g_recent_dirty = true;
+            }
+            return;
+        }
+    }
+
+    // Shift everything down, insert at top
+    if (g_recent_count < MAX_RECENT) g_recent_count += 1;
+    var j: u16 = g_recent_count - 1;
+    while (j > 0) : (j -= 1) {
+        g_recent_paths[j] = g_recent_paths[j - 1];
+        g_recent_path_lens[j] = g_recent_path_lens[j - 1];
+        g_recent_display[j] = g_recent_display[j - 1];
+        g_recent_display_lens[j] = g_recent_display_lens[j - 1];
+    }
+    const plen: u16 = @intCast(@min(path.len, MAX_PATH_LEN));
+    @memcpy(g_recent_paths[0][0..plen], path[0..plen]);
+    g_recent_path_lens[0] = plen;
+    const display = std.fs.path.basename(path);
+    const dlen: u16 = @intCast(@min(display.len, MAX_DISPLAY));
+    @memcpy(g_recent_display[0][0..dlen], display[0..dlen]);
+    g_recent_display_lens[0] = dlen;
+    g_recent_dirty = true;
 }
 
 export fn bridge_is_session_selected(idx: u16) callconv(.c) u8 {
@@ -793,6 +987,17 @@ fn syncState() void {
     }
     g_redraw = true;
     updateDisplayNames();
+
+    // Track session paths as recent projects
+    for (state.sessions.items) |s| {
+        if (s.active_path.len > 0) {
+            addRecentProject(s.active_path);
+        }
+    }
+    if (g_recent_dirty) {
+        saveRecentProjects();
+        g_recent_dirty = false;
+    }
 }
 
 fn updateRenderCells() void {

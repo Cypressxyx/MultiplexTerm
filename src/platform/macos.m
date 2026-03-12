@@ -41,6 +41,12 @@ extern uint16_t bridge_get_session_display_name_len(uint16_t idx);
 extern void bridge_tmux_command(uint8_t cmd_id);
 extern uint8_t bridge_is_started(void);
 extern void bridge_start_first_session(void);
+extern uint16_t bridge_get_recent_project_count(void);
+extern const uint8_t* bridge_get_recent_project_display(uint16_t idx);
+extern uint16_t bridge_get_recent_project_display_len(uint16_t idx);
+extern const uint8_t* bridge_get_recent_project_path(uint16_t idx);
+extern uint16_t bridge_get_recent_project_path_len(uint16_t idx);
+extern void bridge_create_session_in_dir(const uint8_t* path, uint16_t len);
 
 // === Layout constants ===
 static const CGFloat kSidebarWidth    = 220.0;
@@ -51,6 +57,8 @@ static const CGFloat kNewBtnHeight    = 44.0;
 static const CGFloat kAccentBarW      = 3.0;
 static const CGFloat kTermPadLeft     = 4.0;
 static const CGFloat kTitlebarInset   = 28.0; // space for traffic light buttons
+static const CGFloat kRecentRowH      = 30.0;
+static const CGFloat kRecentHeaderH   = 36.0;
 
 // === Theme system ===
 // Each theme defines 6 base colors; derived colors (textDim, selectedBg, etc.) are
@@ -169,6 +177,7 @@ static NSColor* colorFromU32(uint32_t c, NSColor* def) {
 @property (nonatomic) CGFloat cellHeight;
 @property (nonatomic, strong) NSTimer* tickTimer;
 @property (nonatomic) NSInteger hoveredSession; // -1 = none
+@property (nonatomic) NSInteger hoveredRecentProject; // -1 = none
 @property (nonatomic) NSInteger closeArmedSession; // -1 = none (first click turns red, second click deletes)
 @property (nonatomic) BOOL cursorBlink;
 @property (nonatomic) NSUInteger blinkCounter;
@@ -237,6 +246,7 @@ static NSString* const kPaletteHints[] = {
         if (self.cellHeight < 1) self.cellHeight = ceil(sz.height);
 
         self.hoveredSession = -1;
+        self.hoveredRecentProject = -1;
         self.closeArmedSession = -1;
         self.cursorBlink = YES;
         self.blinkCounter = 0;
@@ -412,17 +422,14 @@ static NSString* const kPaletteHints[] = {
         }
 
         y += kSessionRowH;
-        if (y + kSessionRowH > h - kNewBtnHeight) break;
+        if (y + kSessionRowH > h) break;
     }
 
-    // Bottom: "+ New Session" button
-    CGFloat btnY = h - kNewBtnHeight;
-
-    // Top border
+    // "+ New Session" button (after sessions, not bottom-anchored)
+    CGFloat btnY = y;
     [g_border setFill];
     NSRectFill(NSMakeRect(0, btnY, sw, 1));
 
-    // Button text
     NSDictionary* btnAttrs = @{
         NSFontAttributeName: self.uiFont,
         NSForegroundColorAttributeName: g_textMuted,
@@ -432,6 +439,42 @@ static NSString* const kPaletteHints[] = {
     CGFloat btnTextX = (sw - btnSz.width) / 2;
     CGFloat btnTextY = btnY + (kNewBtnHeight - btnSz.height) / 2;
     [btnText drawAtPoint:NSMakePoint(btnTextX, btnTextY) withAttributes:btnAttrs];
+    y = btnY + kNewBtnHeight;
+
+    // Recent Projects section
+    uint16_t rpCount = bridge_get_recent_project_count();
+    if (rpCount > 0) {
+        // Header
+        [g_border setFill];
+        NSRectFill(NSMakeRect(0, y, sw, 1));
+        [@"RECENT PROJECTS" drawAtPoint:NSMakePoint(kSidebarPadH, y + 8) withAttributes:headerAttrs];
+        y += kRecentHeaderH;
+
+        for (uint16_t i = 0; i < rpCount; i++) {
+            if (y + kRecentRowH > h) break;
+
+            NSRect rowRect = NSMakeRect(0, y, sw - 1, kRecentRowH);
+            if (self.hoveredRecentProject == i) {
+                [g_hoverBg setFill];
+                NSRectFill(rowRect);
+            }
+
+            uint16_t dLen = bridge_get_recent_project_display_len(i);
+            const uint8_t* dPtr = bridge_get_recent_project_display(i);
+            NSString* dName = [[NSString alloc] initWithBytes:dPtr length:dLen encoding:NSUTF8StringEncoding];
+            if (!dName) dName = @"?";
+
+            NSDictionary* rpAttrs = @{
+                NSFontAttributeName: self.uiFont,
+                NSForegroundColorAttributeName: g_textDim,
+            };
+            CGFloat rpTextX = kSidebarPadH + 14;
+            CGFloat rpTextY = y + (kRecentRowH - 14) / 2;
+            [dName drawAtPoint:NSMakePoint(rpTextX, rpTextY) withAttributes:rpAttrs];
+
+            y += kRecentRowH;
+        }
+    }
 }
 
 - (void)drawPalette {
@@ -891,19 +934,13 @@ static NSString* const kPaletteHints[] = {
     CGFloat listTop = kTitlebarInset + kHeaderHeight;
 
     if (bridge_is_sidebar_visible() && p.x < kSidebarWidth) {
-        CGFloat h = self.bounds.size.height;
-        CGFloat btnY = h - kNewBtnHeight;
-
-        // "+ New Session" button
-        if (p.y >= btnY) {
-            bridge_create_session();
-            return;
-        }
+        uint16_t count = bridge_get_session_count();
+        CGFloat sessionsEnd = listTop + count * kSessionRowH;
+        CGFloat btnEnd = sessionsEnd + kNewBtnHeight;
 
         // Session click
-        if (p.y >= listTop) {
+        if (p.y >= listTop && p.y < sessionsEnd) {
             uint16_t idx = (uint16_t)((p.y - listTop) / kSessionRowH);
-            uint16_t count = bridge_get_session_count();
             if (idx < count) {
                 // Close button hit (right 28px of row)
                 if (p.x >= kSidebarWidth - 28) {
@@ -930,7 +967,30 @@ static NSString* const kPaletteHints[] = {
 
                 bridge_select_session(idx);
             }
+            return;
         }
+
+        // "+ New Session" button
+        if (p.y >= sessionsEnd && p.y < btnEnd) {
+            bridge_create_session();
+            return;
+        }
+
+        // Recent projects click
+        uint16_t rpCount = bridge_get_recent_project_count();
+        if (rpCount > 0) {
+            CGFloat rpStart = btnEnd + kRecentHeaderH; // after header
+            if (p.y >= rpStart) {
+                uint16_t rpIdx = (uint16_t)((p.y - rpStart) / kRecentRowH);
+                if (rpIdx < rpCount) {
+                    uint16_t pathLen = bridge_get_recent_project_path_len(rpIdx);
+                    const uint8_t* pathPtr = bridge_get_recent_project_path(rpIdx);
+                    bridge_create_session_in_dir(pathPtr, pathLen);
+                    return;
+                }
+            }
+        }
+
         return;
     }
 
@@ -976,10 +1036,10 @@ static NSString* const kPaletteHints[] = {
     CGFloat listTop = kTitlebarInset + kHeaderHeight;
 
     if (bridge_is_sidebar_visible() && p.x < kSidebarWidth && p.y >= listTop) {
-        CGFloat btnY = self.bounds.size.height - kNewBtnHeight;
-        if (p.y < btnY) {
+        uint16_t count = bridge_get_session_count();
+        CGFloat sessionsEnd = listTop + count * kSessionRowH;
+        if (p.y < sessionsEnd) {
             uint16_t idx = (uint16_t)((p.y - listTop) / kSessionRowH);
-            uint16_t count = bridge_get_session_count();
             if (idx < count) {
                 [self showContextMenuForSession:idx event:event];
                 return;
@@ -1097,23 +1157,36 @@ static NSString* const kPaletteHints[] = {
         return;
     }
 
-    NSInteger old = self.hoveredSession;
+    NSInteger oldSession = self.hoveredSession;
+    NSInteger oldRecent = self.hoveredRecentProject;
     CGFloat listTop = kTitlebarInset + kHeaderHeight;
 
+    self.hoveredSession = -1;
+    self.hoveredRecentProject = -1;
+
     if (bridge_is_sidebar_visible() && p.x < kSidebarWidth && p.y >= listTop) {
-        CGFloat btnY = self.bounds.size.height - kNewBtnHeight;
-        if (p.y < btnY) {
-            self.hoveredSession = (NSInteger)((p.y - listTop) / kSessionRowH);
-            uint16_t count = bridge_get_session_count();
-            if (self.hoveredSession >= count) self.hoveredSession = -1;
+        uint16_t count = bridge_get_session_count();
+        CGFloat sessionsEnd = listTop + count * kSessionRowH;
+        CGFloat btnEnd = sessionsEnd + kNewBtnHeight;
+
+        if (p.y < sessionsEnd) {
+            // Hovering over sessions
+            NSInteger idx = (NSInteger)((p.y - listTop) / kSessionRowH);
+            if (idx < count) self.hoveredSession = idx;
         } else {
-            self.hoveredSession = -1;
+            // Check recent projects area
+            uint16_t rpCount = bridge_get_recent_project_count();
+            if (rpCount > 0) {
+                CGFloat rpStart = btnEnd + kRecentHeaderH;
+                if (p.y >= rpStart) {
+                    NSInteger rpIdx = (NSInteger)((p.y - rpStart) / kRecentRowH);
+                    if (rpIdx >= 0 && rpIdx < rpCount) self.hoveredRecentProject = rpIdx;
+                }
+            }
         }
-    } else {
-        self.hoveredSession = -1;
     }
 
-    if (old != self.hoveredSession) {
+    if (oldSession != self.hoveredSession || oldRecent != self.hoveredRecentProject) {
         [self setNeedsDisplay:YES];
     }
 

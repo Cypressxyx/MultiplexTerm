@@ -127,6 +127,17 @@ pub const TmuxManager = struct {
         if (result.term.Exited != 0) return error.TmuxCommandFailed;
     }
 
+    pub fn createSessionInDir(self: *const TmuxManager, name: []const u8, dir: []const u8) !void {
+        const result = std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &.{ "tmux", "new-session", "-d", "-s", name, "-c", dir, "-e", "CLAUDECODE=" },
+        }) catch return error.TmuxCommandFailed;
+        self.allocator.free(result.stdout);
+        self.allocator.free(result.stderr);
+
+        if (result.term.Exited != 0) return error.TmuxCommandFailed;
+    }
+
     pub fn renameSession(self: *const TmuxManager, old_name: []const u8, new_name: []const u8) !void {
         const result = std.process.Child.run(.{
             .allocator = self.allocator,

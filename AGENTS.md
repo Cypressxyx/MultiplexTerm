@@ -199,8 +199,18 @@ sequenceDiagram
 - Priority: **user-renamed session name** (if not auto-generated) → notable app name (via `prettyName()`) → raw command → directory basename → session name
 - `isAutoName()` detects auto-generated names: bare digits, `session-N`, `<cwd>-N` — anything else is treated as user-renamed
 - `isShell()` recognizes: zsh, bash, fish, sh, dash, tcsh, ksh, tmux, login
+- `isVersionString()` detects version-like commands (e.g. "2.1.74") that some tools set as process title — these are skipped
 - Sessions are sorted by `session_created` timestamp (newest first, newest at top)
 - `prettyName()` maps: nvim→"NVim", claude→"Claude Code", python3→"Python", node→"Node.js", etc.
+
+### Recent Projects
+- Sidebar shows a "RECENT PROJECTS" section below the "+ New Session" button
+- Tracks directories from active tmux sessions via `pane_current_path`
+- Persisted to `~/.mterm/recent_projects` (one path per line, max 10 entries)
+- Clicking a recent project creates a new tmux session in that directory
+- Backend: `loadRecentProjects()`, `saveRecentProjects()`, `addRecentProject()` in bridge.zig
+- FFI: `bridge_get_recent_project_count/display/path()`, `bridge_create_session_in_dir()`
+- Manager: `createSessionInDir()` in tmux/manager.zig uses `tmux new-session -d -s <name> -c <dir>`
 
 ### Theme System
 - 25 built-in themes selectable via Cmd+K → Theme... submenu
@@ -239,6 +249,9 @@ zig build test
 # - Cmd+C/V → copy/paste works
 # - Cmd+K → Theme... → theme picker opens, can select theme with click or keyboard
 # - Scroll, hover, and back button work in theme picker
+# - Recent projects section appears in sidebar after visiting directories
+# - Clicking a recent project creates a new session in that directory
+# - Running Claude Code → sidebar should show "Claude Code", not a version number
 
 # Logs
 cat /tmp/mterm.log
@@ -259,3 +272,4 @@ cat /tmp/mterm.log
 - **Finder/Raycast launch PATH**: macOS GUI apps get a minimal PATH (`/usr/bin:/bin`). Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) must be added at startup in `applicationDidFinishLaunching` or tmux won't be found.
 - **Finder/Raycast launch cwd**: When launched from Finder/Raycast, cwd is `/`. `basename("/")` is empty, which gives tmux an invalid session name. ALL code that derives names from cwd (`startPty`, `bridge_create_session`) must fall back to HOME basename or "mterm".
 - **Finder/Raycast launch locale**: Without `LANG`/`LC_ALL` set, tmux uses VT100 line-drawing escape sequences instead of UTF-8 box-drawing characters, causing garbled rendering. Must set `LANG=en_US.UTF-8` at startup.
+- **Sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all compute the same flow layout: sessions → "+ New Session" button → recent projects header → recent project rows. Never bottom-anchor the button.
