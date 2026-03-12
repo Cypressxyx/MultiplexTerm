@@ -30,7 +30,7 @@ pub const TmuxManager = struct {
             .allocator = self.allocator,
             .argv = &.{
                 "tmux", "list-sessions", "-F",
-                "#{session_id}|#{session_name}|#{session_attached}|#{session_windows}|#{session_activity}|#{pane_current_command}|#{pane_current_path}",
+                "#{session_id}|#{session_name}|#{session_attached}|#{session_windows}|#{session_activity}|#{pane_current_command}|#{pane_current_path}|#{session_created}",
             },
         }) catch return sessions;
         defer self.allocator.free(result.stdout);
@@ -44,6 +44,13 @@ pub const TmuxManager = struct {
             const session = parseSessionLine(self.allocator, line) catch continue;
             sessions.append(self.allocator, session) catch continue;
         }
+
+        // Sort by creation time (oldest first) so new sessions appear at the bottom
+        std.mem.sortUnstable(state_mod.Session, sessions.items, {}, struct {
+            fn lessThan(_: void, a: state_mod.Session, b: state_mod.Session) bool {
+                return a.created < b.created;
+            }
+        }.lessThan);
 
         return sessions;
     }
@@ -181,6 +188,7 @@ pub const TmuxManager = struct {
         _ = fields.next(); // activity (unused)
         const command = fields.next() orelse "";
         const path = fields.next() orelse "";
+        const created_str = fields.next() orelse "0";
 
         return .{
             .id = try allocator.dupe(u8, id),
@@ -189,6 +197,7 @@ pub const TmuxManager = struct {
             .window_count = std.fmt.parseInt(u16, windows_str, 10) catch 0,
             .active_command = if (command.len > 0) try allocator.dupe(u8, command) else "",
             .active_path = if (path.len > 0) try allocator.dupe(u8, path) else "",
+            .created = std.fmt.parseInt(i64, created_str, 10) catch 0,
         };
     }
 

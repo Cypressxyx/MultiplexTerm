@@ -8,6 +8,7 @@ pub const Session = struct {
     window_count: u16 = 0,
     active_command: []const u8 = "",
     active_path: []const u8 = "",
+    created: i64 = 0, // unix timestamp from tmux session_created
 };
 
 pub const Window = struct {
