@@ -197,6 +197,7 @@ static NSColor* colorFromU32(uint32_t c, NSColor* def) {
 @property (nonatomic) NSInteger paletteSelection;  // selected row (command idx or theme idx)
 @property (nonatomic) NSInteger paletteMode;        // 0 = commands, 1 = themes
 @property (nonatomic) NSInteger themeScroll;         // scroll offset for theme list (25 themes, 12 visible)
+@property (nonatomic, strong) NSMutableString* paletteSearchText;
 @end
 
 static const int kPaletteItemCount = 9; // 8 commands + 1 theme
@@ -257,6 +258,7 @@ static NSString* const kPaletteHints[] = {
         self.paletteSelection = 0;
         self.paletteMode = 0;
         self.themeScroll = 0;
+        self.paletteSearchText = [NSMutableString string];
     }
     return self;
 }
@@ -493,6 +495,71 @@ static NSString* const kPaletteHints[] = {
     }
 }
 
+- (int)getFilteredCommandIndices:(int*)outIndices {
+    int count = 0;
+    if (self.paletteSearchText.length == 0) {
+        for (int i = 0; i < kPaletteItemCount; i++) outIndices[count++] = i;
+    } else {
+        NSString* query = [self.paletteSearchText lowercaseString];
+        for (int i = 0; i < kPaletteItemCount; i++) {
+            if ([[kPaletteLabels[i] lowercaseString] containsString:query]) {
+                outIndices[count++] = i;
+            }
+        }
+    }
+    return count;
+}
+
+- (int)getFilteredThemeIndices:(int*)outIndices {
+    int count = 0;
+    if (self.paletteSearchText.length == 0) {
+        for (int i = 0; i < kThemeCount; i++) outIndices[count++] = i;
+    } else {
+        NSString* query = [self.paletteSearchText lowercaseString];
+        for (int i = 0; i < kThemeCount; i++) {
+            NSString* name = [[NSString stringWithUTF8String:kThemes[i].name] lowercaseString];
+            if ([name containsString:query]) {
+                outIndices[count++] = i;
+            }
+        }
+    }
+    return count;
+}
+
+- (void)drawPaletteSearchBar:(CGFloat)cardX y:(CGFloat)cardY w:(CGFloat)cardW placeholder:(NSString*)placeholder leftInset:(CGFloat)leftInset {
+    CGFloat inputMargin = leftInset;
+    CGFloat inputH = 28;
+    CGFloat inputX = cardX + inputMargin;
+    CGFloat inputY = cardY + 8;
+    CGFloat inputW = cardW - inputMargin - 14;
+
+    NSBezierPath* inputPath = [NSBezierPath bezierPathWithRoundedRect:
+        NSMakeRect(inputX, inputY, inputW, inputH) xRadius:6 yRadius:6];
+    [g_bg setFill];
+    [inputPath fill];
+    [g_border setStroke];
+    inputPath.lineWidth = 0.5;
+    [inputPath stroke];
+
+    NSDictionary* searchFontAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
+    };
+    NSString* searchDisplay = self.paletteSearchText.length > 0
+        ? [self.paletteSearchText copy] : placeholder;
+    NSColor* searchColor = self.paletteSearchText.length > 0 ? g_text : g_textMuted;
+    NSDictionary* searchAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
+        NSForegroundColorAttributeName: searchColor,
+    };
+    [searchDisplay drawAtPoint:NSMakePoint(inputX + 10, inputY + 5) withAttributes:searchAttrs];
+
+    // Cursor bar
+    CGFloat cursorTextW = self.paletteSearchText.length > 0
+        ? [self.paletteSearchText sizeWithAttributes:searchFontAttrs].width : 0;
+    [g_accent setFill];
+    NSRectFill(NSMakeRect(inputX + 10 + cursorTextW, inputY + 6, 1.5, inputH - 12));
+}
+
 - (void)drawPalette {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
@@ -505,11 +572,16 @@ static NSString* const kPaletteHints[] = {
         return;
     }
 
+    // Compute filtered items
+    int filteredIndices[9];
+    int filteredCount = [self getFilteredCommandIndices:filteredIndices];
+
     // Palette card
     CGFloat cardW = 320;
     CGFloat rowH = 38;
     CGFloat headerH = 44;
-    CGFloat cardH = headerH + rowH * kPaletteItemCount + 8;
+    int displayCount = filteredCount > 0 ? filteredCount : 1;
+    CGFloat cardH = headerH + rowH * displayCount + 8;
     CGFloat cardX = (w - cardW) / 2;
     CGFloat cardY = h * 0.2;
 
@@ -531,48 +603,54 @@ static NSString* const kPaletteHints[] = {
     cardPath.lineWidth = 1;
     [cardPath stroke];
 
-    NSDictionary* titleAttrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold],
-        NSForegroundColorAttributeName: g_text,
-    };
-    [@"Commands" drawAtPoint:NSMakePoint(cardX + 20, cardY + 14) withAttributes:titleAttrs];
+    // Search bar in header
+    [self drawPaletteSearchBar:cardX y:cardY w:cardW placeholder:@"Search commands..." leftInset:14];
 
     [g_border setFill];
     NSRectFill(NSMakeRect(cardX, cardY + headerH, cardW, 1));
 
-    CGFloat itemY = cardY + headerH + 4;
-    for (int i = 0; i < kPaletteItemCount; i++) {
-        BOOL sel = (self.paletteSelection == i);
-
-        if (sel) {
-            NSBezierPath* rowBg = [NSBezierPath bezierPathWithRoundedRect:
-                NSMakeRect(cardX + 6, itemY, cardW - 12, rowH) xRadius:6 yRadius:6];
-            [g_selectedBg setFill];
-            [rowBg fill];
-        }
-
-        NSDictionary* hintAttrs = @{
-            NSFontAttributeName: [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightMedium],
-            NSForegroundColorAttributeName: sel ? g_green : g_textMuted,
+    if (filteredCount == 0) {
+        NSDictionary* noResultAttrs = @{
+            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
+            NSForegroundColorAttributeName: g_textMuted,
         };
-        [kPaletteHints[i] drawAtPoint:NSMakePoint(cardX + 20, itemY + 9) withAttributes:hintAttrs];
+        [@"No results" drawAtPoint:NSMakePoint(cardX + 20, cardY + headerH + 12) withAttributes:noResultAttrs];
+    } else {
+        CGFloat itemY = cardY + headerH + 4;
+        for (int fi = 0; fi < filteredCount; fi++) {
+            int i = filteredIndices[fi];
+            BOOL sel = (self.paletteSelection == fi);
 
-        NSDictionary* labelAttrs = @{
-            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:sel ? NSFontWeightMedium : NSFontWeightRegular],
-            NSForegroundColorAttributeName: sel ? g_text : g_textDim,
-        };
-        [kPaletteLabels[i] drawAtPoint:NSMakePoint(cardX + 48, itemY + 10) withAttributes:labelAttrs];
+            if (sel) {
+                NSBezierPath* rowBg = [NSBezierPath bezierPathWithRoundedRect:
+                    NSMakeRect(cardX + 6, itemY, cardW - 12, rowH) xRadius:6 yRadius:6];
+                [g_selectedBg setFill];
+                [rowBg fill];
+            }
 
-        // Arrow indicator for submenu items
-        if (i == kPaletteItemCount - 1) {
-            NSDictionary* arrowAttrs = @{
-                NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
-                NSForegroundColorAttributeName: sel ? g_text : g_textMuted,
+            NSDictionary* hintAttrs = @{
+                NSFontAttributeName: [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightMedium],
+                NSForegroundColorAttributeName: sel ? g_green : g_textMuted,
             };
-            [@"\u203A" drawAtPoint:NSMakePoint(cardX + cardW - 28, itemY + 10) withAttributes:arrowAttrs];
-        }
+            [kPaletteHints[i] drawAtPoint:NSMakePoint(cardX + 20, itemY + 9) withAttributes:hintAttrs];
 
-        itemY += rowH;
+            NSDictionary* labelAttrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:13 weight:sel ? NSFontWeightMedium : NSFontWeightRegular],
+                NSForegroundColorAttributeName: sel ? g_text : g_textDim,
+            };
+            [kPaletteLabels[i] drawAtPoint:NSMakePoint(cardX + 48, itemY + 10) withAttributes:labelAttrs];
+
+            // Arrow indicator for submenu items
+            if (i == kPaletteItemCount - 1) {
+                NSDictionary* arrowAttrs = @{
+                    NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
+                    NSForegroundColorAttributeName: sel ? g_text : g_textMuted,
+                };
+                [@"\u203A" drawAtPoint:NSMakePoint(cardX + cardW - 28, itemY + 10) withAttributes:arrowAttrs];
+            }
+
+            itemY += rowH;
+        }
     }
 }
 
@@ -580,11 +658,16 @@ static NSString* const kPaletteHints[] = {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
 
+    // Compute filtered themes
+    int filteredIndices[25];
+    int filteredCount = [self getFilteredThemeIndices:filteredIndices];
+
     CGFloat cardW = 340;
     CGFloat rowH = 34;
     CGFloat headerH = 44;
-    int visibleItems = 12;
-    CGFloat cardH = headerH + rowH * visibleItems + 8;
+    int maxVisible = 12;
+    int displayCount = filteredCount > 0 ? (filteredCount < maxVisible ? filteredCount : maxVisible) : 1;
+    CGFloat cardH = headerH + rowH * displayCount + 8;
     CGFloat cardX = (w - cardW) / 2;
     CGFloat cardY = h * 0.15;
 
@@ -606,73 +689,77 @@ static NSString* const kPaletteHints[] = {
     cardPath.lineWidth = 1;
     [cardPath stroke];
 
-    // Header with back arrow
+    // Header: back button + search field
     NSDictionary* backAttrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
+        NSFontAttributeName: [NSFont systemFontOfSize:16 weight:NSFontWeightRegular],
         NSForegroundColorAttributeName: g_textMuted,
     };
-    [@"\u2039 Back" drawAtPoint:NSMakePoint(cardX + 16, cardY + 14) withAttributes:backAttrs];
+    [@"\u2039" drawAtPoint:NSMakePoint(cardX + 14, cardY + 12) withAttributes:backAttrs];
 
-    NSDictionary* titleAttrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold],
-        NSForegroundColorAttributeName: g_text,
-    };
-    NSString* title = @"Theme";
-    CGSize titleSz = [title sizeWithAttributes:titleAttrs];
-    [title drawAtPoint:NSMakePoint(cardX + (cardW - titleSz.width) / 2, cardY + 14) withAttributes:titleAttrs];
+    [self drawPaletteSearchBar:cardX y:cardY w:cardW placeholder:@"Search themes..." leftInset:34];
 
     [g_border setFill];
     NSRectFill(NSMakeRect(cardX, cardY + headerH, cardW, 1));
 
-    // Theme list
-    CGFloat itemY = cardY + headerH + 4;
-    for (int i = 0; i < visibleItems && (i + self.themeScroll) < kThemeCount; i++) {
-        int themeIdx = (int)(i + self.themeScroll);
-        BOOL sel = (self.paletteSelection == themeIdx);
-        BOOL current = (themeIdx == g_savedTheme);
-
-        if (sel) {
-            NSBezierPath* rowBg = [NSBezierPath bezierPathWithRoundedRect:
-                NSMakeRect(cardX + 6, itemY, cardW - 12, rowH) xRadius:6 yRadius:6];
-            [g_selectedBg setFill];
-            [rowBg fill];
-        }
-
-        // Color preview swatch
-        const ThemeDef* td = &kThemes[themeIdx];
-        CGFloat swatchY = itemY + (rowH - 14) / 2;
-        NSBezierPath* swatch = [NSBezierPath bezierPathWithRoundedRect:
-            NSMakeRect(cardX + 18, swatchY, 14, 14) xRadius:3 yRadius:3];
-        [hexColor(td->bg) setFill];
-        [swatch fill];
-        [hexColor(td->border) setStroke];
-        swatch.lineWidth = 1;
-        [swatch stroke];
-
-        // Accent dot inside swatch
-        NSBezierPath* accentDot = [NSBezierPath bezierPathWithOvalInRect:
-            NSMakeRect(cardX + 22, swatchY + 4, 6, 6)];
-        [hexColor(td->accent) setFill];
-        [accentDot fill];
-
-        // Theme name
-        NSString* name = [NSString stringWithUTF8String:td->name];
-        NSDictionary* labelAttrs = @{
-            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:sel ? NSFontWeightMedium : NSFontWeightRegular],
-            NSForegroundColorAttributeName: sel ? g_text : g_textDim,
+    if (filteredCount == 0) {
+        NSDictionary* noResultAttrs = @{
+            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
+            NSForegroundColorAttributeName: g_textMuted,
         };
-        [name drawAtPoint:NSMakePoint(cardX + 42, itemY + 8) withAttributes:labelAttrs];
+        [@"No results" drawAtPoint:NSMakePoint(cardX + 20, cardY + headerH + 12) withAttributes:noResultAttrs];
+    } else {
+        // Theme list
+        CGFloat itemY = cardY + headerH + 4;
+        int visibleItems = filteredCount < maxVisible ? filteredCount : maxVisible;
+        for (int vi = 0; vi < visibleItems && (vi + self.themeScroll) < filteredCount; vi++) {
+            int filteredIdx = (int)(vi + self.themeScroll);
+            int themeIdx = filteredIndices[filteredIdx];
+            BOOL sel = (self.paletteSelection == filteredIdx);
+            BOOL current = (themeIdx == g_savedTheme);
 
-        // Checkmark for current theme
-        if (current) {
-            NSDictionary* checkAttrs = @{
-                NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightMedium],
-                NSForegroundColorAttributeName: g_green,
+            if (sel) {
+                NSBezierPath* rowBg = [NSBezierPath bezierPathWithRoundedRect:
+                    NSMakeRect(cardX + 6, itemY, cardW - 12, rowH) xRadius:6 yRadius:6];
+                [g_selectedBg setFill];
+                [rowBg fill];
+            }
+
+            // Color preview swatch
+            const ThemeDef* td = &kThemes[themeIdx];
+            CGFloat swatchY = itemY + (rowH - 14) / 2;
+            NSBezierPath* swatch = [NSBezierPath bezierPathWithRoundedRect:
+                NSMakeRect(cardX + 18, swatchY, 14, 14) xRadius:3 yRadius:3];
+            [hexColor(td->bg) setFill];
+            [swatch fill];
+            [hexColor(td->border) setStroke];
+            swatch.lineWidth = 1;
+            [swatch stroke];
+
+            // Accent dot inside swatch
+            NSBezierPath* accentDot = [NSBezierPath bezierPathWithOvalInRect:
+                NSMakeRect(cardX + 22, swatchY + 4, 6, 6)];
+            [hexColor(td->accent) setFill];
+            [accentDot fill];
+
+            // Theme name
+            NSString* name = [NSString stringWithUTF8String:td->name];
+            NSDictionary* labelAttrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:13 weight:sel ? NSFontWeightMedium : NSFontWeightRegular],
+                NSForegroundColorAttributeName: sel ? g_text : g_textDim,
             };
-            [@"\u2713" drawAtPoint:NSMakePoint(cardX + cardW - 30, itemY + 8) withAttributes:checkAttrs];
-        }
+            [name drawAtPoint:NSMakePoint(cardX + 42, itemY + 8) withAttributes:labelAttrs];
 
-        itemY += rowH;
+            // Checkmark for current theme
+            if (current) {
+                NSDictionary* checkAttrs = @{
+                    NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightMedium],
+                    NSForegroundColorAttributeName: g_green,
+                };
+                [@"\u2713" drawAtPoint:NSMakePoint(cardX + cardW - 30, itemY + 8) withAttributes:checkAttrs];
+            }
+
+            itemY += rowH;
+        }
     }
 }
 
@@ -908,21 +995,31 @@ static NSString* const kPaletteHints[] = {
 
         if (self.paletteMode == 1) {
             // Theme picker mode
+            int filteredIndices[25];
+            int filteredCount = [self getFilteredThemeIndices:filteredIndices];
             CGFloat cardW = 340;
             CGFloat rowH = 34;
             CGFloat headerH = 44;
-            int visibleItems = 12;
-            CGFloat cardH = headerH + rowH * visibleItems + 8;
+            int maxVisible = 12;
+            int displayCount = filteredCount > 0 ? (filteredCount < maxVisible ? filteredCount : maxVisible) : 1;
+            CGFloat cardH = headerH + rowH * displayCount + 8;
             CGFloat cardX = (w - cardW) / 2;
             CGFloat cardY = h * 0.15;
 
-            // Click on "Back" header area — revert preview
-            if (p.x >= cardX && p.x <= cardX + cardW &&
+            // Click on back button area (left 34px of header)
+            if (p.x >= cardX && p.x < cardX + 34 &&
                 p.y >= cardY && p.y < cardY + headerH) {
                 applyTheme(g_savedTheme);
                 self.paletteMode = 0;
                 self.paletteSelection = kPaletteItemCount - 1;
+                [self.paletteSearchText setString:@""];
                 [self setNeedsDisplay:YES];
+                return;
+            }
+
+            // Click in header (search bar area) — absorb
+            if (p.x >= cardX && p.x <= cardX + cardW &&
+                p.y >= cardY && p.y < cardY + headerH) {
                 return;
             }
 
@@ -931,11 +1028,12 @@ static NSString* const kPaletteHints[] = {
             if (p.x >= cardX && p.x <= cardX + cardW &&
                 p.y >= itemsTop && p.y <= cardY + cardH) {
                 int idx = (int)((p.y - itemsTop) / rowH);
-                int themeIdx = (int)(idx + self.themeScroll);
-                if (themeIdx >= 0 && themeIdx < kThemeCount) {
-                    applyTheme(themeIdx); // confirm
+                int filteredIdx = (int)(idx + self.themeScroll);
+                if (filteredIdx >= 0 && filteredIdx < filteredCount) {
+                    applyTheme(filteredIndices[filteredIdx]); // confirm
                     self.paletteVisible = NO;
                     self.paletteMode = 0;
+                    [self.paletteSearchText setString:@""];
                     [self setNeedsDisplay:YES];
                     return;
                 }
@@ -945,34 +1043,47 @@ static NSString* const kPaletteHints[] = {
             applyTheme(g_savedTheme);
             self.paletteVisible = NO;
             self.paletteMode = 0;
+            [self.paletteSearchText setString:@""];
             [self setNeedsDisplay:YES];
             return;
         }
 
         // Commands mode
+        int filteredIndices[9];
+        int filteredCount = [self getFilteredCommandIndices:filteredIndices];
         CGFloat cardW = 320;
         CGFloat rowH = 38;
         CGFloat headerH = 44;
-        CGFloat cardH = headerH + rowH * kPaletteItemCount + 8;
+        int displayCount = filteredCount > 0 ? filteredCount : 1;
+        CGFloat cardH = headerH + rowH * displayCount + 8;
         CGFloat cardX = (w - cardW) / 2;
         CGFloat cardY = h * 0.2;
+
+        // Click in header (search bar area) — absorb
+        if (p.x >= cardX && p.x <= cardX + cardW &&
+            p.y >= cardY && p.y < cardY + headerH) {
+            return;
+        }
 
         if (p.x >= cardX && p.x <= cardX + cardW &&
             p.y >= cardY + headerH && p.y <= cardY + cardH) {
             int idx = (int)((p.y - cardY - headerH - 4) / rowH);
-            if (idx >= 0 && idx < kPaletteItemCount) {
-                if (idx == kPaletteItemCount - 1) {
+            if (idx >= 0 && idx < filteredCount) {
+                int actualIdx = filteredIndices[idx];
+                if (actualIdx == kPaletteItemCount - 1) {
                     // "Theme..." — switch to theme picker
                     g_savedTheme = g_currentTheme;
                     self.paletteMode = 1;
                     self.paletteSelection = g_currentTheme;
                     self.themeScroll = 0;
+                    [self.paletteSearchText setString:@""];
                     if (self.paletteSelection >= 12) {
                         self.themeScroll = self.paletteSelection - 6;
                     }
                 } else {
-                    bridge_tmux_command((uint8_t)idx);
+                    bridge_tmux_command((uint8_t)actualIdx);
                     self.paletteVisible = NO;
+                    [self.paletteSearchText setString:@""];
                 }
                 [self setNeedsDisplay:YES];
                 return;
@@ -981,6 +1092,7 @@ static NSString* const kPaletteHints[] = {
         // Click outside dismisses
         self.paletteVisible = NO;
         self.paletteMode = 0;
+        [self.paletteSearchText setString:@""];
         [self setNeedsDisplay:YES];
         return;
     }
@@ -1223,6 +1335,8 @@ static NSString* const kPaletteHints[] = {
 
         if (self.paletteMode == 1) {
             // Theme picker hover
+            int filteredIndices[25];
+            int filteredCount = [self getFilteredThemeIndices:filteredIndices];
             CGFloat cardW = 340;
             CGFloat rowH = 34;
             CGFloat headerH = 44;
@@ -1232,15 +1346,17 @@ static NSString* const kPaletteHints[] = {
 
             if (p.x >= cardX && p.x <= cardX + cardW && p.y >= itemsTop) {
                 int idx = (int)((p.y - itemsTop) / rowH);
-                int themeIdx = (int)(idx + self.themeScroll);
-                if (themeIdx >= 0 && themeIdx < kThemeCount && themeIdx != self.paletteSelection) {
-                    self.paletteSelection = themeIdx;
-                    applyTheme(themeIdx); // live preview on hover
+                int filteredIdx = (int)(idx + self.themeScroll);
+                if (filteredIdx >= 0 && filteredIdx < filteredCount && filteredIdx != self.paletteSelection) {
+                    self.paletteSelection = filteredIdx;
+                    applyTheme(filteredIndices[filteredIdx]); // live preview on hover
                     [self setNeedsDisplay:YES];
                 }
             }
         } else {
             // Commands hover
+            int filteredIndices[9];
+            int filteredCount = [self getFilteredCommandIndices:filteredIndices];
             CGFloat cardW = 320;
             CGFloat rowH = 38;
             CGFloat headerH = 44;
@@ -1250,7 +1366,7 @@ static NSString* const kPaletteHints[] = {
 
             if (p.x >= cardX && p.x <= cardX + cardW && p.y >= itemsTop) {
                 int idx = (int)((p.y - itemsTop) / rowH);
-                if (idx >= 0 && idx < kPaletteItemCount && idx != self.paletteSelection) {
+                if (idx >= 0 && idx < filteredCount && idx != self.paletteSelection) {
                     self.paletteSelection = idx;
                     [self setNeedsDisplay:YES];
                 }
@@ -1330,14 +1446,16 @@ static NSString* const kPaletteHints[] = {
 - (void)scrollWheel:(NSEvent*)event {
     if (self.paletteVisible) {
         if (self.paletteMode == 1) {
-            // Scroll theme list
+            // Scroll theme list (filtered)
+            int filteredIndices[25];
+            int filteredCount = [self getFilteredThemeIndices:filteredIndices];
             CGFloat dy = event.scrollingDeltaY;
             if (event.hasPreciseScrollingDeltas) dy /= 10.0;
             int lines = (int)dy;
             if (lines == 0 && dy != 0) lines = (dy > 0) ? 1 : -1;
             if (lines == 0) return;
             NSInteger newScroll = self.themeScroll - lines;
-            NSInteger maxScroll = kThemeCount - 12;
+            NSInteger maxScroll = filteredCount - 12;
             if (maxScroll < 0) maxScroll = 0;
             if (newScroll < 0) newScroll = 0;
             if (newScroll > maxScroll) newScroll = maxScroll;
@@ -1431,85 +1549,158 @@ static NSString* const kPaletteHints[] = {
     // Enter confirms (theme already applied), Escape reverts to g_savedTheme.
     if (self.paletteVisible) {
         if (self.paletteMode == 1) {
-            // Theme picker: navigate + live preview
+            // Theme picker: navigate + live preview + search
+            int filteredIndices[25];
+            int filteredCount = [self getFilteredThemeIndices:filteredIndices];
             switch (event.keyCode) {
                 case 126: { // Up
-                    NSInteger sel = self.paletteSelection;
-                    if (sel > 0) {
-                        self.paletteSelection = sel - 1;
+                    if (filteredCount > 0 && self.paletteSelection > 0) {
+                        self.paletteSelection--;
                         if (self.paletteSelection < self.themeScroll) {
                             self.themeScroll = self.paletteSelection;
                         }
-                        applyTheme((int)self.paletteSelection); // live preview
+                        applyTheme(filteredIndices[self.paletteSelection]);
                     }
                     [self setNeedsDisplay:YES];
                     return;
                 }
                 case 125: { // Down
-                    NSInteger sel = self.paletteSelection;
-                    if (sel < kThemeCount - 1) {
-                        self.paletteSelection = sel + 1;
-                        if (self.paletteSelection >= self.themeScroll + 12) {
-                            self.themeScroll = self.paletteSelection - 11;
+                    if (filteredCount > 0 && self.paletteSelection < filteredCount - 1) {
+                        self.paletteSelection++;
+                        int visibleItems = filteredCount < 12 ? filteredCount : 12;
+                        if (self.paletteSelection >= self.themeScroll + visibleItems) {
+                            self.themeScroll = self.paletteSelection - visibleItems + 1;
                         }
-                        applyTheme((int)self.paletteSelection); // live preview
+                        applyTheme(filteredIndices[self.paletteSelection]);
                     }
                     [self setNeedsDisplay:YES];
                     return;
                 }
                 case 36: { // Enter — confirm theme
-                    // Theme is already applied via preview, just close
+                    if (filteredCount > 0 && self.paletteSelection < filteredCount) {
+                        applyTheme(filteredIndices[self.paletteSelection]);
+                    }
                     self.paletteVisible = NO;
                     self.paletteMode = 0;
+                    [self.paletteSearchText setString:@""];
                     [self setNeedsDisplay:YES];
                     return;
                 }
-                case 53: // Escape — revert and go back
-                case 51: { // Delete/Backspace — revert and go back
-                    applyTheme(g_savedTheme); // revert to original
+                case 53: { // Escape — revert and go back
+                    applyTheme(g_savedTheme);
                     self.paletteMode = 0;
                     self.paletteSelection = kPaletteItemCount - 1;
+                    [self.paletteSearchText setString:@""];
                     [self setNeedsDisplay:YES];
                     return;
                 }
-                default:
-                    return;
-            }
-        } else {
-            // Commands mode
-            switch (event.keyCode) {
-                case 126: // Up
-                    self.paletteSelection = (self.paletteSelection - 1 + kPaletteItemCount) % kPaletteItemCount;
-                    [self setNeedsDisplay:YES];
-                    return;
-                case 125: // Down
-                    self.paletteSelection = (self.paletteSelection + 1) % kPaletteItemCount;
-                    [self setNeedsDisplay:YES];
-                    return;
-                case 36: // Enter
-                    if (self.paletteSelection == kPaletteItemCount - 1) {
-                        // "Theme..." — switch to theme picker mode
-                        g_savedTheme = g_currentTheme; // save for revert
-                        self.paletteMode = 1;
-                        self.paletteSelection = g_currentTheme;
+                case 51: { // Delete/Backspace
+                    if (self.paletteSearchText.length > 0) {
+                        [self.paletteSearchText deleteCharactersInRange:
+                            NSMakeRange(self.paletteSearchText.length - 1, 1)];
+                        self.paletteSelection = 0;
                         self.themeScroll = 0;
-                        if (self.paletteSelection >= 12) {
-                            self.themeScroll = self.paletteSelection - 6;
+                        int newFiltered[25];
+                        int newCount = [self getFilteredThemeIndices:newFiltered];
+                        if (newCount > 0) {
+                            applyTheme(newFiltered[0]);
                         }
                         [self setNeedsDisplay:YES];
                     } else {
-                        bridge_tmux_command((uint8_t)self.paletteSelection);
-                        self.paletteVisible = NO;
+                        // Empty search — go back to commands
+                        applyTheme(g_savedTheme);
+                        self.paletteMode = 0;
+                        self.paletteSelection = kPaletteItemCount - 1;
                         [self setNeedsDisplay:YES];
                     }
                     return;
+                }
+                default: {
+                    NSString* chars = event.characters;
+                    if (chars.length > 0) {
+                        unichar ch = [chars characterAtIndex:0];
+                        if (ch >= 0x20 && ch < 0x7F) {
+                            [self.paletteSearchText appendString:chars];
+                            self.paletteSelection = 0;
+                            self.themeScroll = 0;
+                            int newFiltered[25];
+                            int newCount = [self getFilteredThemeIndices:newFiltered];
+                            if (newCount > 0) {
+                                applyTheme(newFiltered[0]);
+                            }
+                            [self setNeedsDisplay:YES];
+                        }
+                    }
+                    return;
+                }
+            }
+        } else {
+            // Commands mode: navigate + search
+            int filteredIndices[9];
+            int filteredCount = [self getFilteredCommandIndices:filteredIndices];
+            switch (event.keyCode) {
+                case 126: // Up
+                    if (filteredCount > 0) {
+                        self.paletteSelection = (self.paletteSelection - 1 + filteredCount) % filteredCount;
+                    }
+                    [self setNeedsDisplay:YES];
+                    return;
+                case 125: // Down
+                    if (filteredCount > 0) {
+                        self.paletteSelection = (self.paletteSelection + 1) % filteredCount;
+                    }
+                    [self setNeedsDisplay:YES];
+                    return;
+                case 36: { // Enter
+                    if (filteredCount > 0 && self.paletteSelection < filteredCount) {
+                        int actualIdx = filteredIndices[self.paletteSelection];
+                        if (actualIdx == kPaletteItemCount - 1) {
+                            // "Theme..." — switch to theme picker mode
+                            g_savedTheme = g_currentTheme;
+                            self.paletteMode = 1;
+                            self.paletteSelection = g_currentTheme;
+                            self.themeScroll = 0;
+                            [self.paletteSearchText setString:@""];
+                            if (self.paletteSelection >= 12) {
+                                self.themeScroll = self.paletteSelection - 6;
+                            }
+                            [self setNeedsDisplay:YES];
+                        } else {
+                            bridge_tmux_command((uint8_t)actualIdx);
+                            self.paletteVisible = NO;
+                            [self.paletteSearchText setString:@""];
+                            [self setNeedsDisplay:YES];
+                        }
+                    }
+                    return;
+                }
                 case 53: // Escape
                     self.paletteVisible = NO;
                     self.paletteMode = 0;
+                    [self.paletteSearchText setString:@""];
                     [self setNeedsDisplay:YES];
                     return;
-                default:
-                    return; // swallow all other keys while palette is open
+                case 51: { // Backspace
+                    if (self.paletteSearchText.length > 0) {
+                        [self.paletteSearchText deleteCharactersInRange:
+                            NSMakeRange(self.paletteSearchText.length - 1, 1)];
+                        self.paletteSelection = 0;
+                        [self setNeedsDisplay:YES];
+                    }
+                    return;
+                }
+                default: {
+                    NSString* chars = event.characters;
+                    if (chars.length > 0) {
+                        unichar ch = [chars characterAtIndex:0];
+                        if (ch >= 0x20 && ch < 0x7F) {
+                            [self.paletteSearchText appendString:chars];
+                            self.paletteSelection = 0;
+                            [self setNeedsDisplay:YES];
+                        }
+                    }
+                    return;
+                }
             }
         }
     }
@@ -1526,6 +1717,7 @@ static NSString* const kPaletteHints[] = {
             self.paletteSelection = 0;
             self.paletteMode = 0;
             self.themeScroll = 0;
+            [self.paletteSearchText setString:@""];
             [self setNeedsDisplay:YES];
             return;
         }

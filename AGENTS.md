@@ -223,6 +223,10 @@ sequenceDiagram
 - `g_currentTheme` tracks active theme index; `g_savedTheme` saves the pre-preview theme for revert
 - **Live preview**: navigating themes (keyboard or mouse hover) calls `applyTheme()` immediately; Escape/Back reverts to `g_savedTheme`
 - `paletteMode`: 0=commands, 1=themes — controls which view `drawPalette` renders
+- Both command and theme palette modes have a search bar for filtering items by name (case-insensitive substring match)
+- `paletteSearchText` (NSMutableString) holds the current search query; cleared on mode switch, open/close
+- `paletteSelection` is always an index into the *filtered* list, not the absolute list; mapped back via `getFilteredCommandIndices:`/`getFilteredThemeIndices:`
+- In theme mode, backspace deletes search text; when search is empty, backspace goes back to commands
 - Fonts: SF Mono (terminal), SF Pro (UI), Menlo (italic/bold-italic)
 
 ### Command Palette (Cmd+K)
