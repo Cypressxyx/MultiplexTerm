@@ -15,16 +15,49 @@ A native macOS terminal multiplexer GUI built with Zig and Cocoa. Wraps tmux wit
 ## How It Works
 
 ```mermaid
-graph LR
-    User([User]) -->|keyboard/mouse| GUI[macOS Cocoa GUI]
-    GUI -->|C FFI| Bridge[Zig Bridge Layer]
-    Bridge --> PTY[PTY]
-    Bridge --> Engine[VT100 Engine]
-    Bridge --> TmuxMgr[Tmux Manager]
-    PTY <-->|read/write| Tmux[tmux server]
-    TmuxMgr -->|subprocess| Tmux
-    Engine --> Screen[Screen Model]
-    Screen -->|cells| GUI
+graph TD
+    subgraph GUI["macOS / Cocoa — src/platform/macos.m"]
+        Sidebar["Sidebar\nSessions, + New, Cmd+K palette"]
+        TermView["Terminal Rendering\ndrawTerminal, drawCursor"]
+    end
+
+    subgraph Bridge["Bridge Layer (Zig) — src/platform/bridge.zig"]
+        BridgeTick["bridge_tick()"]
+        BridgeKey["bridge_key_input()"]
+        BridgeResize["bridge_resize()"]
+        BridgeSession["bridge_select/create/kill_session()"]
+    end
+
+    subgraph Core["Core Modules"]
+        PTY["PTY I/O\nsrc/pty.zig"]
+        Tmux["Tmux Manager\nsrc/tmux/manager.zig"]
+        Engine["Terminal Engine\nsrc/terminal/engine.zig"]
+        Parser["VT Parser\nsrc/terminal/parser.zig"]
+        Screen["Screen Model\nsrc/terminal/screen.zig"]
+        State["App State\nsrc/state.zig"]
+    end
+
+    TmuxServer["tmux server\n(subprocess)"]
+
+    Sidebar -->|"mouse click"| BridgeSession
+    TermView -->|"NSTimer 60fps"| BridgeTick
+    GUI -->|"keyDown"| BridgeKey
+    GUI -->|"setFrameSize"| BridgeResize
+
+    BridgeTick --> PTY
+    BridgeTick --> Engine
+    BridgeTick --> State
+    BridgeKey --> PTY
+    BridgeSession --> Tmux
+    BridgeResize --> Engine
+
+    PTY <-->|"read/write"| TmuxServer
+    Tmux -->|"subprocess calls"| TmuxServer
+    Engine --> Parser
+    Engine --> Screen
+
+    BridgeTick -->|"syncState every 30 ticks"| Tmux
+    BridgeTick -->|"updateRenderCells"| TermView
 ```
 
 ## Requirements

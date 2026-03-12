@@ -92,6 +92,18 @@ fn startPty(cols: u16, rows: u16) void {
     g_started = true;
 
     syncState();
+
+    // Explicitly select the session we just attached to
+    if (g_state) |*state| {
+        const target = g_session_name_buf[0..@as(usize, @intCast(std.mem.indexOfScalar(u8, &g_session_name_buf, 0) orelse 0))];
+        for (state.sessions.items, 0..) |s, i| {
+            if (std.mem.eql(u8, s.name, target)) {
+                state.active_session_idx = i;
+                break;
+            }
+        }
+    }
+
     if (g_tmux) |*t| {
         t.hideStatusBar() catch {};
         t.enableMouse();
