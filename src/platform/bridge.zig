@@ -277,7 +277,6 @@ fn computeDisplayName(session: *const state_mod.Session) []const u8 {
     }
 
     const cmd = session.active_command;
-    const path = session.active_path;
 
     // If running a notable app, show its pretty name
     if (cmd.len > 0 and !isShell(cmd)) {
@@ -285,13 +284,7 @@ fn computeDisplayName(session: *const state_mod.Session) []const u8 {
         return cmd; // unknown app — show raw command name
     }
 
-    // Shell or no command — show directory basename
-    if (path.len > 0) {
-        const base = std.fs.path.basename(path);
-        if (base.len > 0) return base;
-    }
-
-    // Fallback to session name
+    // Shell or no command — show session name (preserves the -N suffix)
     return session.name;
 }
 
