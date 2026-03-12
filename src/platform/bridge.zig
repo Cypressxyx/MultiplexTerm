@@ -626,6 +626,10 @@ fn reattachOrQuit() void {
     var sessions = tmux.listSessions() catch {
         logMsg("Cannot list sessions, going to empty state");
         g_started = false;
+        if (g_state) |*state| {
+            state.clearSessions();
+            state.active_session_idx = null;
+        }
         g_redraw = true;
         return;
     };
@@ -637,6 +641,10 @@ fn reattachOrQuit() void {
     if (sessions.items.len == 0) {
         logMsg("No tmux sessions remain, going to empty state");
         g_started = false;
+        if (g_state) |*state| {
+            state.clearSessions();
+            state.active_session_idx = null;
+        }
         g_redraw = true;
         return;
     }

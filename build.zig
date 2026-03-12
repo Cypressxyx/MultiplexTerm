@@ -55,4 +55,47 @@ pub fn build(b: *std.Build) void {
     const lint_cmd = b.addSystemCommand(&.{ "zlint", "src/" });
     const lint_step = b.step("lint", "Run zlint linter");
     lint_step.dependOn(&lint_cmd.step);
+
+    // Install .app bundle to /Applications
+    const app_step = b.step("install-app", "Install mTerm.app to /Applications");
+    const install_app = b.addSystemCommand(&.{
+        "sh", "-c",
+        \\set -e
+        \\APP="/Applications/mTerm.app"
+        \\rm -rf "$APP"
+        \\mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+        \\cp zig-out/bin/mterm "$APP/Contents/MacOS/mterm"
+        \\cp assets/mterm.icns "$APP/Contents/Resources/mterm.icns"
+        \\cat > "$APP/Contents/Info.plist" << 'PLIST'
+        \\<?xml version="1.0" encoding="UTF-8"?>
+        \\<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        \\<plist version="1.0">
+        \\<dict>
+        \\  <key>CFBundleName</key>
+        \\  <string>mTerm</string>
+        \\  <key>CFBundleDisplayName</key>
+        \\  <string>mTerm</string>
+        \\  <key>CFBundleIdentifier</key>
+        \\  <string>com.multiplexterm.mterm</string>
+        \\  <key>CFBundleVersion</key>
+        \\  <string>1.0</string>
+        \\  <key>CFBundleShortVersionString</key>
+        \\  <string>1.0</string>
+        \\  <key>CFBundleExecutable</key>
+        \\  <string>mterm</string>
+        \\  <key>CFBundleIconFile</key>
+        \\  <string>mterm</string>
+        \\  <key>CFBundlePackageType</key>
+        \\  <string>APPL</string>
+        \\  <key>LSMinimumSystemVersion</key>
+        \\  <string>13.0</string>
+        \\  <key>NSHighResolutionCapable</key>
+        \\  <true/>
+        \\</dict>
+        \\</plist>
+        \\PLIST
+        ,
+    });
+    install_app.step.dependOn(b.getInstallStep());
+    app_step.dependOn(&install_app.step);
 }
