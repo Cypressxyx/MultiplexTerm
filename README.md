@@ -118,7 +118,8 @@ sequenceDiagram
     Bridge-->>Bridge: ssh host tmux list-sessions
     User->>GUI: click + New Session
     GUI->>Bridge: bridge_create_ssh_shell()
-    Bridge->>Tmux: new-session ssh host -t tmux new-session
+    Bridge->>Tmux: new-session -d ssh_host-N
+    Note right of Bridge: Attaches directly via startPtyAttach
 
     Note over GUI,Tmux: Session Exit
     Tmux-->>PTY: HUP
@@ -201,10 +202,11 @@ brew install tmux
 
 ## SSH Remote Sessions
 
-- **REMOTE** section in the sidebar shows SSH hosts from `~/.ssh/config` and manually added hosts
+- **REMOTE** section in the sidebar shows hosts from mterm's own config (`~/.mterm/ssh_hosts`)
 - Click a host to connect — discovers remote tmux sessions automatically
 - Click a remote tmux session to attach to it
 - Click **+ New Session** under a host to create a new tmux session on the remote machine
+- Click **×** on a host to remove it (kills active sessions for that host)
 - Click **×** on an active remote session to close it
-- Click **+ Add Host** to add a host manually (supports `user@host:port` format)
+- Click **+ Add Host** to add a host — shows hosts from `~/.ssh/config` as suggestions, or type a custom host
 - Status indicators: green = connected, yellow = connecting, red = error, hollow = disconnected

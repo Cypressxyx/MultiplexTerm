@@ -135,8 +135,19 @@ sequenceDiagram
     Bridge-->>Bridge: ssh host tmux list-sessions
     User->>GUI: click + New Session
     GUI->>Bridge: bridge_create_ssh_shell()
-    Bridge->>Tmux: new-session ssh host
+    Bridge->>Tmux: new-session -d ssh_host-N
+    Bridge->>Bridge: startPtyAttach (if empty state)
     Note right of Bridge: Session named "ssh_host-N"<br/>shown under REMOTE, not SESSIONS
+
+    Note over GUI,Tmux: Add SSH Host
+    User->>GUI: click + Add Host
+    GUI->>Bridge: bridge_load_ssh_suggestions()
+    Bridge->>SSH: parseSshConfig()
+    SSH-->>Bridge: hosts from ~/.ssh/config
+    Bridge-->>GUI: filtered suggestion list
+    User->>GUI: select suggestion or type custom host
+    GUI->>Bridge: bridge_add_ssh_host(name)
+    Bridge->>Bridge: append to ~/.mterm/ssh_hosts
 
     Note over GUI,Tmux: Session Exit
     Tmux-->>PTY: HUP
@@ -195,15 +206,19 @@ sequenceDiagram
 
 ### SSH Remote Sessions
 1. Sidebar shows "REMOTE" section (between New Session button and Recent Projects) — always visible
-2. Hosts from `~/.ssh/config` (via `ssh_mod.parseSshConfig()`, skips wildcards) + manual hosts from `~/.mterm/ssh_hosts`
+2. **Hosts loaded exclusively from `~/.mterm/ssh_hosts`** (mterm's own file, one hostname per line). `~/.ssh/config` is never auto-loaded or modified.
 3. Click disconnected host → spawns background thread running `ssh -o BatchMode=yes host tmux list-sessions`
 4. If successful, host status = connected, expanded view shows: active SSH sessions → remote tmux sessions → "+ New Session"
 5. Click remote tmux session → `tmux.createSshSession()` creates local tmux session running `ssh host -t 'tmux attach-session -t session'`
 6. Click "+ New Session" → `bridge_create_ssh_shell()` creates local tmux session running `ssh host` (plain shell)
 7. **SSH sessions show under REMOTE, not SESSIONS**: all SSH-created sessions use `ssh_` name prefix (e.g., `ssh_host/session`, `ssh_host-N`), filtered from SESSIONS list via `bridge_is_ssh_session()`, displayed under their host in REMOTE via `bridge_get_ssh_active_count/display/idx()`
 8. Active SSH sessions show with green dot + accent bar when selected; remote tmux sessions show dimmer (not yet connected)
-9. "+ Add Host" button opens in-app palette card (`paletteMode=2`) for manual host entry
-10. Status dots: green=connected, yellow=connecting, red=error, hollow=disconnected
+9. "+ Add Host" button opens in-app palette card (`paletteMode=2`) showing hosts from `~/.ssh/config` as suggestions (filterable by search), plus custom host entry
+10. **× button on any host** removes it from `~/.mterm/ssh_hosts` and kills active SSH sessions for that host
+11. Status dots: green=connected, yellow=connecting, red=error, hollow=disconnected
+12. **SSH from empty state**: Creating an SSH session when no sessions exist uses `startPtyAttach()` to attach directly to the SSH session — does NOT create an unwanted local session via `startPty()`
+13. Backend: `loadSshHosts()` reads `~/.mterm/ssh_hosts`, `saveSshHosts()` writes all hosts. `loadSshSuggestions()` parses `~/.ssh/config` and filters out already-added hosts.
+14. FFI: `bridge_load_ssh_suggestions()`, `bridge_get_ssh_suggestion_count/name/name_len()` expose suggestions to ObjC for the Add Host palette
 
 ### Session Exit / HUP
 1. PTY HUP detected → `reattachOrQuit()`
@@ -269,10 +284,10 @@ sequenceDiagram
 - Floating card over terminal — no full-screen overlay (dark overlays make dark themes invisible)
 - Card uses drop shadow (`NSShadow`) for contrast against terminal content
 - All palette colors use theme globals (`g_sidebarBg`, `g_border`, `g_selectedBg`, `g_text`, etc.) — never hardcoded hex
-- Three modes: commands (`paletteMode=0`, 9 items), theme picker (`paletteMode=1`, 25 scrollable items), add SSH host (`paletteMode=2`, text input)
+- Three modes: commands (`paletteMode=0`, 9 items), theme picker (`paletteMode=1`, 25 scrollable items), add SSH host (`paletteMode=2`, suggestion list + text input)
 - Commands mode: up/down navigate, Enter executes (or enters theme submenu for last item), Escape closes
 - Theme mode: up/down navigate with live preview, Enter confirms, Escape/Backspace reverts and goes back
-- Add SSH host mode: uses search bar as input field, Enter adds host, Escape cancels — no NSAlert
+- Add SSH host mode: shows `~/.ssh/config` hosts as suggestions (filtered by `getFilteredSshSuggestionIndices:`), up/down to select, Enter adds selected suggestion or typed text, Escape cancels — no NSAlert
 - Mouse: click to select, hover to highlight (and preview in theme mode), scroll wheel in theme picker
 - Cmd+K while in theme preview reverts to saved theme before closing
 
@@ -303,10 +318,12 @@ zig build test
 # - Recent projects section appears in sidebar after visiting directories
 # - Clicking a recent project creates a new session in that directory
 # - Running Claude Code → sidebar should show "Claude Code", not a version number
-# - SSH: REMOTE section shows hosts from ~/.ssh/config
+# - SSH: REMOTE section shows hosts from ~/.mterm/ssh_hosts
 # - SSH: Click host → status changes to connecting, then shows remote tmux sessions
-# - SSH: Click remote session → creates local tmux session with SSH attach, appears in sessions list
-# - SSH: Click "+ Add Host" → opens in-app input card (not NSAlert), type host and press Enter
+# - SSH: Click remote session → creates local tmux session with SSH attach, appears under REMOTE
+# - SSH: Click "+ Add Host" → opens palette with ~/.ssh/config suggestions, can filter and select or type custom
+# - SSH: × button on host removes it and kills active sessions for that host
+# - SSH: Creating remote session from empty state should NOT create extra local session
 # - Drag a file from Finder into terminal → file path is pasted (shell-escaped)
 # - Drag multiple files → all paths pasted space-separated
 
@@ -334,4 +351,7 @@ cat /tmp/mterm.log
 - **SSH session naming**: All SSH sessions use `ssh_` prefix (e.g., `ssh_host/session`, `ssh_host-3`). `bridge_is_ssh_session()` checks this prefix. `isSshSessionForHost()` matches sessions to hosts by checking `ssh_<hostname>/` or `ssh_<hostname>-`. These sessions are hidden from SESSIONS and shown under REMOTE.
 - **SSH session sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all walk session rows with `bridge_is_ssh_session()` skip — never compute `sessionsEnd = listTop + count * kSessionRowH` since SSH sessions are excluded.
 - **No NSAlert for SSH host input**: The "Add Host" prompt MUST use the in-app palette card (`paletteMode=2`), not NSAlert — native macOS dialogs don't match the custom-drawn UI style.
+- **SSH host model**: `~/.mterm/ssh_hosts` is the single source of truth for REMOTE hosts. `~/.ssh/config` is only used for suggestions in the Add Host palette (via `loadSshSuggestions()`). Never auto-load or modify `~/.ssh/config`.
+- **SSH empty-state attach**: When creating SSH sessions from empty state (`!g_started`), use `startPtyAttach()` — NOT `startPty()`. `startPty()` creates an unwanted local tmux session. The SSH tmux session must be created first (detached via `-d`), then attach to it.
+- **SSH host removal cleanup**: `bridge_remove_ssh_host()` must kill all active local SSH sessions for the host (via `isSshSessionForHost()`) before removing the host entry, or sessions become orphaned (hidden from both SESSIONS and REMOTE).
 - **Drag-and-drop path escaping**: File paths from Finder drag must be shell-escaped (spaces, quotes, parens) before sending to PTY, or commands will break on paths with special characters.
