@@ -373,6 +373,10 @@ fn updateDisplayNames() void {
 }
 
 fn computeDisplayName(session: *const state_mod.Session) []const u8 {
+    const S = struct {
+        var buf: [MAX_DISPLAY]u8 = undefined;
+    };
+
     // If the user manually renamed the session, always show that name.
     // Auto-generated names match: cwd dirname, dirname-N, session-N, or bare digits.
     if (!isAutoNameWithPath(session.name, session.active_path)) {
@@ -380,20 +384,25 @@ fn computeDisplayName(session: *const state_mod.Session) []const u8 {
     }
 
     const cmd = session.active_command;
+    const dir = if (session.active_path.len > 0) std.fs.path.basename(session.active_path) else "";
 
     // If running a notable app, show its pretty name
     if (cmd.len > 0 and !isShell(cmd)) {
         // Version strings (e.g. "2.1.74") are typically Claude Code setting its process title
-        if (isVersionString(cmd)) return "Claude Code";
-        if (prettyName(cmd)) |pretty| return pretty;
-        return cmd; // unknown app — show raw command name
+        const pretty = if (isVersionString(cmd)) @as(?[]const u8, "Claude Code") else prettyName(cmd);
+        if (pretty) |p| {
+            if (dir.len > 0) {
+                // "AppName - folder"
+                const result = std.fmt.bufPrint(&S.buf, "{s} - {s}", .{ p, dir }) catch return p;
+                return result;
+            }
+            return p;
+        }
+        if (!isVersionString(cmd)) return cmd; // unknown app — show raw command name
     }
 
     // Shell or no command — show directory basename if available
-    if (session.active_path.len > 0) {
-        const dir = std.fs.path.basename(session.active_path);
-        if (dir.len > 0) return dir;
-    }
+    if (dir.len > 0) return dir;
 
     // Fallback to session name (preserves the -N suffix)
     return session.name;
@@ -606,9 +615,11 @@ export fn bridge_create_session_in_dir(path_ptr: [*]const u8, path_len: u16) cal
 }
 
 fn recentProjectsPath() ?[]const u8 {
+    const S = struct {
+        var buf: [512]u8 = undefined;
+    };
     const home = std.posix.getenv("HOME") orelse return null;
-    var buf: [512]u8 = undefined;
-    const path = std.fmt.bufPrint(&buf, "{s}/.mterm/recent_projects", .{home}) catch return null;
+    const path = std.fmt.bufPrint(&S.buf, "{s}/.mterm/recent_projects", .{home}) catch return null;
     return path;
 }
 
@@ -640,8 +651,10 @@ fn saveRecentProjects() void {
     const rp_path = recentProjectsPath() orelse return;
     // Ensure ~/.mterm/ exists
     const home = std.posix.getenv("HOME") orelse return;
-    var dir_buf: [512]u8 = undefined;
-    const dir_path = std.fmt.bufPrint(&dir_buf, "{s}/.mterm", .{home}) catch return;
+    const S = struct {
+        var dir_buf: [512]u8 = undefined;
+    };
+    const dir_path = std.fmt.bufPrint(&S.dir_buf, "{s}/.mterm", .{home}) catch return;
     std.fs.cwd().makeDir(dir_path) catch |err| {
         if (err != error.PathAlreadyExists) return;
     };
