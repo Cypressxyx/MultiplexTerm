@@ -139,7 +139,7 @@ pub const TmuxManager = struct {
     }
 
     /// Create a local tmux session that runs an SSH command to attach to a remote tmux session.
-    /// The local session name is "ssh:<host>/<remote_session>".
+    /// The local session name is "ssh_<host>/<remote_session>".
     pub fn createSshSession(self: *const TmuxManager, session_name: []const u8, ssh_host: []const u8, remote_session: []const u8) !void {
         // Build: ssh HOST -t 'tmux attach-session -t SESSION'
         var cmd_buf: [512]u8 = undefined;

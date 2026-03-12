@@ -957,7 +957,7 @@ export fn bridge_select_ssh_session(host_idx: u16, sess_idx: u16) callconv(.c) v
 
     // Create a local tmux session name: "ssh:host/session"
     var name_buf: [128]u8 = undefined;
-    const local_name = std.fmt.bufPrint(&name_buf, "ssh:{s}/{s}", .{ host_name, sess_name }) catch return;
+    const local_name = std.fmt.bufPrint(&name_buf, "ssh_{s}/{s}", .{ host_name, sess_name }) catch return;
 
     if (!g_started) {
         // Need to start PTY first with a regular session, then create the SSH session
@@ -999,7 +999,7 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
     // Create a local tmux session that just opens an SSH shell
     var name_buf: [128]u8 = undefined;
     const count = state.sessions.items.len;
-    const local_name = std.fmt.bufPrint(&name_buf, "ssh:{s}-{d}", .{ host_name, count }) catch return;
+    const local_name = std.fmt.bufPrint(&name_buf, "ssh_{s}-{d}", .{ host_name, count }) catch return;
 
     if (!g_started) {
         startPty(g_initial_cols, g_initial_rows);
@@ -1065,12 +1065,12 @@ export fn bridge_is_ssh_host_manual(idx: u16) callconv(.c) u8 {
     return if (idx >= g_ssh_manual_start) 1 else 0;
 }
 
-/// Returns 1 if the session at idx is an SSH session (name starts with "ssh:")
+/// Returns 1 if the session at idx is an SSH session (name starts with "ssh_")
 export fn bridge_is_ssh_session(idx: u16) callconv(.c) u8 {
     if (g_state) |*s| {
         if (idx < s.sessions.items.len) {
             const name = s.sessions.items[idx].name;
-            if (name.len >= 4 and std.mem.eql(u8, name[0..4], "ssh:")) return 1;
+            if (name.len >= 4 and std.mem.eql(u8, name[0..4], "ssh_")) return 1;
         }
     }
     return 0;
@@ -1103,13 +1103,13 @@ export fn bridge_get_ssh_active_session_idx(host_idx: u16, nth: u16) callconv(.c
     return 0xFFFF;
 }
 
-/// Get display name for an active SSH session (strip "ssh:" prefix)
+/// Get display name for an active SSH session (strip "ssh_" prefix)
 export fn bridge_get_ssh_active_display(host_idx: u16, nth: u16) callconv(.c) [*]const u8 {
     const idx = bridge_get_ssh_active_session_idx(host_idx, nth);
     if (idx == 0xFFFF) return "".ptr;
-    // Use the display name but strip the "ssh:" prefix if present
+    // Use the display name but strip the "ssh_" prefix if present
     const dlen = g_display_lens[idx];
-    if (dlen >= 4 and std.mem.eql(u8, g_display_bufs[idx][0..4], "ssh:")) {
+    if (dlen >= 4 and std.mem.eql(u8, g_display_bufs[idx][0..4], "ssh_")) {
         return g_display_bufs[idx][4..].ptr;
     }
     if (dlen > 0) return &g_display_bufs[idx];
@@ -1120,7 +1120,7 @@ export fn bridge_get_ssh_active_display_len(host_idx: u16, nth: u16) callconv(.c
     const idx = bridge_get_ssh_active_session_idx(host_idx, nth);
     if (idx == 0xFFFF) return 0;
     const dlen = g_display_lens[idx];
-    if (dlen >= 4 and std.mem.eql(u8, g_display_bufs[idx][0..4], "ssh:")) {
+    if (dlen >= 4 and std.mem.eql(u8, g_display_bufs[idx][0..4], "ssh_")) {
         return dlen - 4;
     }
     if (dlen > 0) return dlen;
@@ -1131,7 +1131,7 @@ export fn bridge_get_ssh_active_display_len(host_idx: u16, nth: u16) callconv(.c
 /// Matches "ssh:<hostname>/..." and "ssh:<hostname>-..."
 fn isSshSessionForHost(session_name: []const u8, host_name: []const u8) bool {
     if (session_name.len < 4 + host_name.len) return false;
-    if (!std.mem.eql(u8, session_name[0..4], "ssh:")) return false;
+    if (!std.mem.eql(u8, session_name[0..4], "ssh_")) return false;
     if (!std.mem.eql(u8, session_name[4 .. 4 + host_name.len], host_name)) return false;
     // Must be followed by '/' or '-' or end of string
     if (session_name.len == 4 + host_name.len) return true;

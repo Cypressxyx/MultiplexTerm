@@ -136,7 +136,7 @@ sequenceDiagram
     User->>GUI: click + New Session
     GUI->>Bridge: bridge_create_ssh_shell()
     Bridge->>Tmux: new-session ssh host
-    Note right of Bridge: Session named "ssh:host-N"<br/>shown under REMOTE, not SESSIONS
+    Note right of Bridge: Session named "ssh_host-N"<br/>shown under REMOTE, not SESSIONS
 
     Note over GUI,Tmux: Session Exit
     Tmux-->>PTY: HUP
@@ -200,7 +200,7 @@ sequenceDiagram
 4. If successful, host status = connected, expanded view shows: active SSH sessions → remote tmux sessions → "+ New Session"
 5. Click remote tmux session → `tmux.createSshSession()` creates local tmux session running `ssh host -t 'tmux attach-session -t session'`
 6. Click "+ New Session" → `bridge_create_ssh_shell()` creates local tmux session running `ssh host` (plain shell)
-7. **SSH sessions show under REMOTE, not SESSIONS**: all SSH-created sessions use `ssh:` name prefix (e.g., `ssh:host/session`, `ssh:host-N`), filtered from SESSIONS list via `bridge_is_ssh_session()`, displayed under their host in REMOTE via `bridge_get_ssh_active_count/display/idx()`
+7. **SSH sessions show under REMOTE, not SESSIONS**: all SSH-created sessions use `ssh_` name prefix (e.g., `ssh_host/session`, `ssh_host-N`), filtered from SESSIONS list via `bridge_is_ssh_session()`, displayed under their host in REMOTE via `bridge_get_ssh_active_count/display/idx()`
 8. Active SSH sessions show with green dot + accent bar when selected; remote tmux sessions show dimmer (not yet connected)
 9. "+ Add Host" button opens in-app palette card (`paletteMode=2`) for manual host entry
 10. Status dots: green=connected, yellow=connecting, red=error, hollow=disconnected
@@ -331,7 +331,7 @@ cat /tmp/mterm.log
 - **Finder/Raycast launch locale**: Without `LANG`/`LC_ALL` set, tmux uses VT100 line-drawing escape sequences instead of UTF-8 box-drawing characters, causing garbled rendering. Must set `LANG=en_US.UTF-8` at startup.
 - **Sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all compute the same flow layout: sessions (skip SSH) → "+ New Session" button → SSH remote section (active SSH sessions → remote tmux sessions → "+ New Session" per host → "+ Add Host") → recent projects. Never bottom-anchor the button.
 - **SSH probe thread safety**: The SSH connection probe runs in a background thread (`sshProbeThreadFn`). It writes to `g_ssh_hosts[idx]` fields and sets `status = .connected` LAST so the main thread sees consistent state. Uses `std.heap.page_allocator` (thread-safe) for the subprocess.
-- **SSH session naming**: All SSH sessions use `ssh:` prefix (e.g., `ssh:host/session`, `ssh:host-3`). `bridge_is_ssh_session()` checks this prefix. `isSshSessionForHost()` matches sessions to hosts by checking `ssh:<hostname>/` or `ssh:<hostname>-`. These sessions are hidden from SESSIONS and shown under REMOTE.
+- **SSH session naming**: All SSH sessions use `ssh_` prefix (e.g., `ssh_host/session`, `ssh_host-3`). `bridge_is_ssh_session()` checks this prefix. `isSshSessionForHost()` matches sessions to hosts by checking `ssh_<hostname>/` or `ssh_<hostname>-`. These sessions are hidden from SESSIONS and shown under REMOTE.
 - **SSH session sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all walk session rows with `bridge_is_ssh_session()` skip — never compute `sessionsEnd = listTop + count * kSessionRowH` since SSH sessions are excluded.
 - **No NSAlert for SSH host input**: The "Add Host" prompt MUST use the in-app palette card (`paletteMode=2`), not NSAlert — native macOS dialogs don't match the custom-drawn UI style.
 - **Drag-and-drop path escaping**: File paths from Finder drag must be shell-escaped (spaces, quotes, parens) before sending to PTY, or commands will break on paths with special characters.
