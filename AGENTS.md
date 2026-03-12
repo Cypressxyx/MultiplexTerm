@@ -298,6 +298,41 @@ sequenceDiagram
 - Registered for `NSPasteboardTypeFileURL` in `initWithFrame`
 - Special characters (spaces, quotes, parens) are escaped for shell safety
 
+## Releasing
+
+When publishing a new version, **all steps are required**:
+
+```bash
+# 1. Bump version in build.zig (CFBundleVersion + CFBundleShortVersionString)
+#    Check existing tags first: git tag --list --sort=-v:refname | head -5
+
+# 2. Commit, tag, and push
+git add build.zig
+git commit -m "Bump version to X.Y.Z"
+git tag vX.Y.Z
+git push && git push origin vX.Y.Z
+
+# 3. Create GitHub release
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "release notes here"
+
+# 4. Build .app, zip, and upload to release
+zig build install-app
+cd /tmp && rm -f mTerm.zip
+ditto -c -k --sequesterRsrc --keepParent /Applications/mTerm.app mTerm.zip
+gh release upload vX.Y.Z /tmp/mTerm.zip
+
+# 5. Update Homebrew tap (https://github.com/Cypressxyx/homebrew-multiplexterm)
+shasum -a 256 /tmp/mTerm.zip   # get the SHA
+# Clone tap, update Casks/multiplexterm.rb with new version + sha256, commit, push
+```
+
+**Checklist:**
+- [ ] Version bumped in `build.zig`
+- [ ] Git tag matches version
+- [ ] GitHub release created with release notes
+- [ ] `mTerm.zip` uploaded to the release
+- [ ] Homebrew tap `Casks/multiplexterm.rb` updated with new version and SHA256
+
 ## Testing
 
 ```bash
