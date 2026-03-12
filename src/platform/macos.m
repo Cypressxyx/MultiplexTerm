@@ -440,8 +440,8 @@ static NSString* const kPaletteHints[] = {
     CGFloat w = self.bounds.size.width;
     CGFloat h = self.bounds.size.height;
 
-    // Dim overlay
-    [[NSColor colorWithWhite:0 alpha:0.4] setFill];
+    // Dim overlay — light enough to still see terminal content
+    [[NSColor colorWithWhite:0 alpha:0.15] setFill];
     NSRectFill(self.bounds);
 
     if (self.paletteMode == 1) {
