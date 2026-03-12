@@ -12,6 +12,7 @@ MultiplexTerm (CLI: `mterm`) is a native macOS GUI terminal that wraps tmux. It 
 2. **Always add unit tests** for every change. Run `zig build test` to verify before committing.
 3. **Update README.md** when adding user-facing features (new shortcuts, UI changes, etc.).
 4. **Run `zig build`** to verify compilation before committing.
+5. **Run `zig build lint`** to check for lint issues before committing.
 
 ## Setup & Build
 
@@ -24,6 +25,9 @@ zig build
 
 # Run tests
 zig build test
+
+# Lint (requires zlint: https://github.com/DonIsaac/zlint)
+zig build lint
 ```
 
 ### Requirements

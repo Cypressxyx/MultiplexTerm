@@ -50,4 +50,9 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // Lint step: runs zlint on src/
+    const lint_cmd = b.addSystemCommand(&.{ "zlint", "src/" });
+    const lint_step = b.step("lint", "Run zlint linter");
+    lint_step.dependOn(&lint_cmd.step);
 }
