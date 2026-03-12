@@ -64,6 +64,7 @@ extern void bridge_refresh_ssh_hosts(void);
 extern void bridge_create_ssh_shell(uint16_t host_idx);
 extern void bridge_add_ssh_host(const uint8_t* name, uint16_t len);
 extern void bridge_remove_ssh_host(uint16_t idx);
+extern void bridge_kill_remote_session(uint16_t host_idx, uint16_t sess_idx);
 extern void bridge_load_ssh_suggestions(void);
 extern uint16_t bridge_get_ssh_suggestion_count(void);
 extern const uint8_t* bridge_get_ssh_suggestion_name(uint16_t idx);
@@ -634,6 +635,15 @@ static NSString* const kPaletteHints[] = {
                     };
                     // Indented under host — dimmer since not yet connected
                     [sessName drawAtPoint:NSMakePoint(kSidebarPadH + 26, y + (kRecentRowH - 14) / 2) withAttributes:sessAttrs];
+
+                    // × close button on hover
+                    if (self.hoveredSshSession == encodedSess) {
+                        NSDictionary* closeAttrs = @{
+                            NSFontAttributeName: [NSFont systemFontOfSize:14 weight:NSFontWeightLight],
+                            NSForegroundColorAttributeName: g_textMuted,
+                        };
+                        [@"\u00D7" drawAtPoint:NSMakePoint(sw - 28, y + (kRecentRowH - 16) / 2) withAttributes:closeAttrs];
+                    }
                     y += kRecentRowH;
                 }
 
@@ -1759,6 +1769,12 @@ static NSString* const kPaletteHints[] = {
                     uint16_t sessCount = bridge_get_ssh_session_count(hi);
                     for (uint16_t si = 0; si < sessCount; si++) {
                         if (p.y >= sshY && p.y < sshY + sshSubRowH && p.x >= rowX && p.x <= rowX + contentW) {
+                            // × close button (right 24px)
+                            if (p.x >= rowX + contentW - 24) {
+                                bridge_kill_remote_session(hi, si);
+                                [self setNeedsDisplay:YES];
+                                return;
+                            }
                             bridge_select_ssh_session(hi, si);
                             [self setNeedsDisplay:YES];
                             return;
@@ -1899,6 +1915,12 @@ static NSString* const kPaletteHints[] = {
                     uint16_t sessCount = bridge_get_ssh_session_count(hi);
                     for (uint16_t si = 0; si < sessCount; si++) {
                         if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
+                            // × close button (right 28px)
+                            if (p.x >= kSidebarWidth - 28) {
+                                bridge_kill_remote_session(hi, si);
+                                [self setNeedsDisplay:YES];
+                                return;
+                            }
                             bridge_select_ssh_session(hi, si);
                             [self setNeedsDisplay:YES];
                             return;

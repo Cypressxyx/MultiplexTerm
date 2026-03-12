@@ -869,15 +869,19 @@ fn sshProbeThreadFn() void {
     const idx = g_ssh_probe_host;
     const host = &g_ssh_hosts[idx];
     const name = host.host.name[0..host.host.name_len];
+    const was_connected = host.status == .connected;
 
     logFmt("SSH probe: connecting to {s}", .{name});
 
     var sessions: [32]ssh_mod.RemoteSession = undefined;
     const count = ssh_mod.listRemoteSessions(std.heap.page_allocator, name, &sessions);
 
-    if (count == 0) {
-        // Could be error or just no tmux sessions — treat as connected with 0 sessions
-        // Check if ssh itself succeeded by looking at the result
+    if (count == 0 and was_connected) {
+        // Re-probe returned 0 but host was already connected — keep existing sessions
+        // (probe may have failed due to transient SSH issue)
+        host.status = .connected;
+    } else if (count == 0) {
+        // First probe returned 0 — connected with no remote tmux sessions
         host.session_count = 0;
         host.status = .connected;
         host.expanded = true;
@@ -962,8 +966,17 @@ export fn bridge_toggle_ssh_host(idx: u16) callconv(.c) void {
             // Already connecting, do nothing
         },
         .connected => {
-            // Toggle expand/collapse
-            host.expanded = !host.expanded;
+            if (host.expanded) {
+                // Collapse
+                host.expanded = false;
+            } else {
+                // Expand and re-probe to refresh session list
+                host.expanded = true;
+                if (g_ssh_probe_thread == null) {
+                    g_ssh_probe_host = idx;
+                    g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch null;
+                }
+            }
             g_redraw = true;
         },
     }
@@ -1028,10 +1041,11 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
     const count = state.sessions.items.len;
     const local_name = std.fmt.bufPrint(&name_buf, "ssh_{s}-{d}", .{ host_name, count }) catch return;
 
-    // Local tmux session runs: ssh HOST -t 'tmux new-session'
+    // Local tmux session runs: ssh HOST -t 'tmux new-session; set destroy-unattached'
+    // destroy-unattached ensures the remote session is killed when SSH disconnects
     const result = std.process.Child.run(.{
         .allocator = g_allocator,
-        .argv = &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name, "-t", "tmux new-session" },
+        .argv = &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name, "-t", "tmux new-session \\; set-option destroy-unattached on" },
     }) catch return;
     g_allocator.free(result.stdout);
     g_allocator.free(result.stderr);
@@ -1047,20 +1061,10 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
     selectSessionByName(local_name);
 
     // Refresh remote sessions list so the new one shows up
-    if (host.status == .connected) {
-        host.status = .connecting;
+    // Don't change status to .connecting — keep the expanded view visible
+    if (g_ssh_probe_thread == null) {
         g_ssh_probe_host = host_idx;
-        g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch {
-            host.status = .connected; // keep old state on probe failure
-            return;
-        };
-    } else if (host.status != .connecting) {
-        host.status = .connecting;
-        g_ssh_probe_host = host_idx;
-        g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch {
-            host.status = .err;
-            return;
-        };
+        g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch null;
     }
     g_redraw = true;
 }
@@ -1111,6 +1115,35 @@ export fn bridge_remove_ssh_host(idx: u16) callconv(.c) void {
     g_ssh_host_count -= 1;
     saveSshHosts();
     syncState();
+    g_redraw = true;
+}
+
+/// Kill a remote tmux session via SSH and re-probe the host
+export fn bridge_kill_remote_session(host_idx: u16, sess_idx: u16) callconv(.c) void {
+    if (host_idx >= g_ssh_host_count) return;
+    const host = &g_ssh_hosts[host_idx];
+    if (sess_idx >= host.session_count) return;
+
+    const host_name = host.host.name[0..host.host.name_len];
+    const sess_name = host.sessions[sess_idx].name[0..host.sessions[sess_idx].name_len];
+
+    logFmt("Killing remote session {s} on {s}", .{ sess_name, host_name });
+
+    // SSH to remote and kill the session
+    var cmd_buf: [256]u8 = undefined;
+    const cmd = std.fmt.bufPrint(&cmd_buf, "tmux kill-session -t '{s}'", .{sess_name}) catch return;
+    const r = std.process.Child.run(.{
+        .allocator = g_allocator,
+        .argv = &.{ "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes", host_name, cmd },
+    }) catch return;
+    g_allocator.free(r.stdout);
+    g_allocator.free(r.stderr);
+
+    // Re-probe to refresh the session list
+    if (g_ssh_probe_thread == null) {
+        g_ssh_probe_host = host_idx;
+        g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch null;
+    }
     g_redraw = true;
 }
 
@@ -1186,6 +1219,20 @@ fn isSshSessionForHost(session_name: []const u8, host_name: []const u8) bool {
     if (session_name.len == 4 + host_name.len) return true;
     const next = session_name[4 + host_name.len];
     return next == '/' or next == '-';
+}
+
+/// Find the SSH host index for a session name and trigger a re-probe
+fn sshReprobeForSession(session_name: []const u8) void {
+    for (0..g_ssh_host_count) |hi| {
+        const host_name = g_ssh_hosts[hi].host.name[0..g_ssh_hosts[hi].host.name_len];
+        if (isSshSessionForHost(session_name, host_name)) {
+            if (g_ssh_probe_thread == null) {
+                g_ssh_probe_host = @intCast(hi);
+                g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch null;
+            }
+            return;
+        }
+    }
 }
 
 export fn bridge_is_session_selected(idx: u16) callconv(.c) u8 {
@@ -1299,7 +1346,31 @@ export fn bridge_kill_session(idx: u16) callconv(.c) void {
         }
     }
 
-    // Now safe to kill
+    // For SSH sessions, also kill the remote tmux session and re-probe
+    if (target_name.len >= 4 and std.mem.eql(u8, target_name[0..4], "ssh_")) {
+        if (std.mem.indexOfScalar(u8, target_name[4..], '/')) |slash_pos| {
+            const host_name = target_name[4 .. 4 + slash_pos];
+            const remote_sess = target_name[4 + slash_pos + 1 ..];
+            if (host_name.len > 0 and remote_sess.len > 0) {
+                var cmd_buf: [256]u8 = undefined;
+                const cmd = std.fmt.bufPrint(&cmd_buf, "tmux kill-session -t '{s}'", .{remote_sess}) catch null;
+                if (cmd) |c| {
+                    const r = std.process.Child.run(.{
+                        .allocator = g_allocator,
+                        .argv = &.{ "ssh", "-o", "ConnectTimeout=3", "-o", "BatchMode=yes", host_name, c },
+                    }) catch null;
+                    if (r) |res| {
+                        g_allocator.free(res.stdout);
+                        g_allocator.free(res.stderr);
+                    }
+                }
+            }
+        }
+        // Re-probe the host to refresh the remote session list
+        sshReprobeForSession(target_name);
+    }
+
+    // Now safe to kill local session
     tmux.killSession(target_name) catch {};
     syncState();
 

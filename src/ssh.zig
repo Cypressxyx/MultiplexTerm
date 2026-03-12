@@ -153,10 +153,7 @@ pub fn listRemoteSessions(allocator: std.mem.Allocator, host_name: []const u8, o
             "-o",
             "StrictHostKeyChecking=accept-new",
             host_name,
-            "tmux",
-            "list-sessions",
-            "-F",
-            "#{session_name}",
+            "tmux list-sessions -F '#{session_name}'",
         },
     }) catch return 0;
     defer allocator.free(result.stdout);

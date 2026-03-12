@@ -205,6 +205,9 @@ sequenceDiagram
 4. Scroll wheel → xterm mouse wheel events (tmux mouse mode)
 
 ### SSH Remote Sessions
+
+> **Deep dive**: See [SSH_INTERNALS.md](SSH_INTERNALS.md) for detailed implementation notes (probe mechanics, session lifecycle, kill flows, FFI function table).
+
 1. Sidebar shows "REMOTE" section (between New Session button and Recent Projects) — always visible
 2. **Hosts loaded exclusively from `~/.mterm/ssh_hosts`** (mterm's own file, one hostname per line). `~/.ssh/config` is never auto-loaded or modified.
 3. Click disconnected host → spawns background thread running `ssh -o BatchMode=yes host tmux list-sessions`
@@ -389,4 +392,8 @@ cat /tmp/mterm.log
 - **SSH host model**: `~/.mterm/ssh_hosts` is the single source of truth for REMOTE hosts. `~/.ssh/config` is only used for suggestions in the Add Host palette (via `loadSshSuggestions()`). Never auto-load or modify `~/.ssh/config`.
 - **SSH empty-state attach**: When creating SSH sessions from empty state (`!g_started`), use `startPtyAttach()` — NOT `startPty()`. `startPty()` creates an unwanted local tmux session. The SSH tmux session must be created first (detached via `-d`), then attach to it.
 - **SSH host removal cleanup**: `bridge_remove_ssh_host()` must kill all active local SSH sessions for the host (via `isSshSessionForHost()`) before removing the host entry, or sessions become orphaned (hidden from both SESSIONS and REMOTE).
+- **SSH probe format string quoting**: The remote command `"tmux list-sessions -F '#{session_name}'"` MUST be a single string arg with the format single-quoted. If `#{session_name}` is unquoted or double-quoted, the remote bash treats `#` as a comment, silently returning 0 sessions.
+- **SSH probe resilience on re-probe**: When re-probing an already-connected host, if the probe fails, preserve the existing session list (`session_count` unchanged) instead of wiping to 0. Also, re-probes must NOT set `status = .connecting` — that hides the expanded view.
+- **SSH destroy-unattached**: New remote sessions created via `+ New Session` use `tmux new-session \; set-option destroy-unattached on` so the remote session auto-destroys when SSH disconnects (local session killed). Pre-existing attached sessions need explicit `tmux kill-session` via SSH.
+- **SSH re-probe after kill**: After killing any SSH session (local or remote), trigger a re-probe of the host to refresh the sidebar. `sshReprobeForSession()` finds the host by matching `ssh_HOST` prefix and spawns the probe thread.
 - **Drag-and-drop path escaping**: File paths from Finder drag must be shell-escaped (spaces, quotes, parens) before sending to PTY, or commands will break on paths with special characters.
