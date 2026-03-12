@@ -11,8 +11,10 @@ A native macOS terminal multiplexer GUI built with Zig and Cocoa. Wraps tmux wit
 - Native macOS GUI with 25 built-in themes (Vercel Dark, Gruvbox, Catppuccin, Nord, Dracula, and more)
 - Tmux session management (create, rename, delete, switch)
 - Smart session names (auto-detects running apps like NVim, Claude Code, etc.)
+- **SSH Remote Sessions** — connect to remote hosts, manage remote tmux sessions, create new remote sessions
 - Recent Projects sidebar with quick-launch into frequently visited directories
-- Command palette (Cmd+K) for splits, windows, pane control, and theme selection
+- Command palette (Cmd+K) with search for splits, windows, pane control, and theme selection
+- Drag-and-drop files from Finder to paste shell-escaped paths
 - VT100/ANSI terminal emulation with 256-color and RGB support
 - Text selection, copy/paste (Cmd+C/V)
 - Mouse support (pane selection, scroll)
@@ -22,8 +24,10 @@ A native macOS terminal multiplexer GUI built with Zig and Cocoa. Wraps tmux wit
 ```mermaid
 graph TD
     subgraph GUI["macOS / Cocoa — src/platform/macos.m"]
-        Sidebar["Sidebar\nSessions, + New, Cmd+K palette"]
+        Sidebar["Sidebar\nSessions, Remote, Recent Projects"]
         TermView["Terminal Rendering\ndrawTerminal, drawCursor"]
+        Palette["Command Palette\nCmd+K, themes, add SSH host"]
+        DragDrop["Drag & Drop\nFile path paste"]
     end
 
     subgraph Bridge["Bridge Layer (Zig) — src/platform/bridge.zig"]
@@ -31,6 +35,7 @@ graph TD
         BridgeKey["bridge_key_input()"]
         BridgeResize["bridge_resize()"]
         BridgeSession["bridge_select/create/kill_session()"]
+        BridgeSSH["bridge_*ssh*()"]
     end
 
     subgraph Core["Core Modules"]
@@ -40,26 +45,33 @@ graph TD
         Parser["VT Parser\nsrc/terminal/parser.zig"]
         Screen["Screen Model\nsrc/terminal/screen.zig"]
         State["App State\nsrc/state.zig"]
+        SSH["SSH Config\nsrc/ssh.zig"]
     end
 
     TmuxServer["tmux server\n(subprocess)"]
+    RemoteHost["Remote SSH host"]
 
     Sidebar -->|"mouse click"| BridgeSession
+    Sidebar -->|"SSH click"| BridgeSSH
     TermView -->|"NSTimer 60fps"| BridgeTick
     GUI -->|"keyDown"| BridgeKey
     GUI -->|"setFrameSize"| BridgeResize
+    DragDrop -->|"file path"| BridgeKey
 
     BridgeTick --> PTY
     BridgeTick --> Engine
     BridgeTick --> State
     BridgeKey --> PTY
     BridgeSession --> Tmux
+    BridgeSSH --> SSH
+    BridgeSSH --> Tmux
     BridgeResize --> Engine
 
     PTY <-->|"read/write"| TmuxServer
     Tmux -->|"subprocess calls"| TmuxServer
     Engine --> Parser
     Engine --> Screen
+    SSH -->|"ssh subprocess"| RemoteHost
 
     BridgeTick -->|"syncState every 30 ticks"| Tmux
     BridgeTick -->|"updateRenderCells"| TermView
@@ -98,6 +110,15 @@ sequenceDiagram
     GUI->>Bridge: bridge_key_input(bytes)
     Bridge->>PTY: write(bytes)
     PTY->>Tmux: input forwarded
+
+    Note over GUI,Tmux: SSH Remote Session
+    User->>GUI: click host in REMOTE
+    GUI->>Bridge: bridge_toggle_ssh_host()
+    Bridge->>Bridge: spawn probe thread
+    Bridge-->>Bridge: ssh host tmux list-sessions
+    User->>GUI: click + New Session
+    GUI->>Bridge: bridge_create_ssh_shell()
+    Bridge->>Tmux: new-session ssh host -t tmux new-session
 
     Note over GUI,Tmux: Session Exit
     Tmux-->>PTY: HUP
@@ -176,3 +197,14 @@ brew install tmux
 - Click **×** once to arm (turns red), click again to delete
 - Right-click a session for context menu
 - **Recent Projects** section shows frequently visited directories — click to open a new session there, **×** to remove
+- **Drag and drop** files from Finder into the terminal to paste their paths
+
+## SSH Remote Sessions
+
+- **REMOTE** section in the sidebar shows SSH hosts from `~/.ssh/config` and manually added hosts
+- Click a host to connect — discovers remote tmux sessions automatically
+- Click a remote tmux session to attach to it
+- Click **+ New Session** under a host to create a new tmux session on the remote machine
+- Click **×** on an active remote session to close it
+- Click **+ Add Host** to add a host manually (supports `user@host:port` format)
+- Status indicators: green = connected, yellow = connecting, red = error, hollow = disconnected

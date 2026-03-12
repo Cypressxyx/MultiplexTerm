@@ -596,6 +596,15 @@ static NSString* const kPaletteHints[] = {
                         NSForegroundColorAttributeName: isSel ? g_text : g_textDim,
                     };
                     [dName drawAtPoint:NSMakePoint(kSidebarPadH + 26, y + (kRecentRowH - 14) / 2) withAttributes:activeAttrs];
+
+                    // × close button on hover or selected
+                    if (isSel || self.hoveredSshSession == encodedActive) {
+                        NSDictionary* closeAttrs = @{
+                            NSFontAttributeName: [NSFont systemFontOfSize:14 weight:NSFontWeightLight],
+                            NSForegroundColorAttributeName: g_textMuted,
+                        };
+                        [@"\u00D7" drawAtPoint:NSMakePoint(sw - 28, y + (kRecentRowH - 16) / 2) withAttributes:closeAttrs];
+                    }
                     y += kRecentRowH;
                 }
 
@@ -1496,7 +1505,15 @@ static NSString* const kPaletteHints[] = {
                     for (uint16_t ai = 0; ai < activeCount; ai++) {
                         if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
                             uint16_t sessIdx = bridge_get_ssh_active_session_idx(hi, ai);
-                            if (sessIdx != 0xFFFF) bridge_select_session(sessIdx);
+                            if (sessIdx != 0xFFFF) {
+                                // × close button (right 28px)
+                                if (p.x >= kSidebarWidth - 28) {
+                                    bridge_kill_session(sessIdx);
+                                    [self setNeedsDisplay:YES];
+                                    return;
+                                }
+                                bridge_select_session(sessIdx);
+                            }
                             [self setNeedsDisplay:YES];
                             return;
                         }
