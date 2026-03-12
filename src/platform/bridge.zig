@@ -538,9 +538,15 @@ export fn bridge_create_session() callconv(.c) void {
     const tmux = &(g_tmux orelse return);
 
     // Use cwd basename + counter for uniqueness
+    // When launched from Finder/Spotlight, cwd may be "/" — fall back to HOME
     var cwd_buf: [1024]u8 = undefined;
     const cwd = std.posix.getcwd(&cwd_buf) catch "/tmp";
-    const dir = std.fs.path.basename(cwd);
+    var dir = std.fs.path.basename(cwd);
+    if (dir.len == 0) {
+        const home = std.posix.getenv("HOME") orelse "/tmp";
+        dir = std.fs.path.basename(home);
+        if (dir.len == 0) dir = "mterm";
+    }
     var buf: [64]u8 = undefined;
     const count = state.sessions.items.len;
     const name = if (count == 0)
