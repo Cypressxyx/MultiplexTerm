@@ -2,6 +2,8 @@
 
 A native macOS terminal multiplexer GUI built with Zig and Cocoa. Wraps tmux with a modern dark UI for managing sessions, panes, and windows — designed for AI-assisted development workflows.
 
+**Website:** https://jfinite.com/multiplexterm/
+
 ## Features
 
 - Native macOS GUI with 25 built-in themes (Vercel Dark, Gruvbox, Catppuccin, Nord, Dracula, and more)
