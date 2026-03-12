@@ -60,6 +60,47 @@ graph TD
     BridgeTick -->|"updateRenderCells"| TermView
 ```
 
+### Data Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant GUI as macos.m
+    participant Bridge as bridge.zig
+    participant PTY as pty.zig
+    participant Engine as engine.zig
+    participant Tmux as tmux server
+
+    Note over GUI,Tmux: Startup
+    GUI->>Bridge: bridge_init()
+    GUI->>Bridge: bridge_resize(cols, rows)
+    Bridge->>PTY: openpty + spawn tmux
+    PTY->>Tmux: tmux new-session -A
+
+    Note over GUI,Tmux: Tick Loop (60fps)
+    loop Every frame
+        GUI->>Bridge: bridge_tick()
+        Bridge->>PTY: poll + read
+        PTY-->>Bridge: terminal output bytes
+        Bridge->>Engine: process(bytes)
+        Engine-->>Bridge: updated screen cells
+        Bridge-->>GUI: BridgeCell array
+        GUI->>GUI: drawRect
+    end
+
+    Note over GUI,Tmux: Key Input
+    User->>GUI: keyDown
+    GUI->>Bridge: bridge_key_input(bytes)
+    Bridge->>PTY: write(bytes)
+    PTY->>Tmux: input forwarded
+
+    Note over GUI,Tmux: Session Exit
+    Tmux-->>PTY: HUP
+    Bridge->>Bridge: reattachOrQuit()
+    Bridge->>Tmux: list-sessions
+    Bridge->>PTY: new PTY + attach
+```
+
 ## Requirements
 
 - macOS
