@@ -6,6 +6,7 @@ const AppState = @import("../state.zig").AppState;
 const state_mod = @import("../state.zig");
 const TerminalEngine = @import("../terminal/engine.zig").TerminalEngine;
 const screen_mod = @import("../terminal/screen.zig");
+const ssh_mod = @import("../ssh.zig");
 
 pub const BridgeCell = extern struct {
     ch: u32 = ' ',
@@ -738,6 +739,212 @@ export fn bridge_remove_recent_project(idx: u16) callconv(.c) void {
     g_recent_count -= 1;
     g_recent_dirty = true;
     saveRecentProjects();
+    g_redraw = true;
+}
+
+// --- SSH remote hosts ---
+const MAX_SSH_HOSTS = 32;
+var g_ssh_hosts: [MAX_SSH_HOSTS]ssh_mod.SshHostState = [_]ssh_mod.SshHostState{.{}} ** MAX_SSH_HOSTS;
+var g_ssh_host_count: u16 = 0;
+var g_ssh_loaded: bool = false;
+var g_ssh_probe_thread: ?std.Thread = null;
+var g_ssh_probe_host: u16 = 0;
+
+fn loadSshHosts() void {
+    var raw_hosts: [MAX_SSH_HOSTS]ssh_mod.SshHost = undefined;
+    const count = ssh_mod.parseSshConfig(&raw_hosts);
+    g_ssh_host_count = count;
+    for (0..count) |i| {
+        g_ssh_hosts[i] = .{ .host = raw_hosts[i] };
+    }
+    g_ssh_loaded = true;
+    logFmt("Loaded {d} SSH hosts from config", .{count});
+}
+
+fn sshProbeThreadFn() void {
+    const idx = g_ssh_probe_host;
+    const host = &g_ssh_hosts[idx];
+    const name = host.host.name[0..host.host.name_len];
+
+    logFmt("SSH probe: connecting to {s}", .{name});
+
+    var sessions: [32]ssh_mod.RemoteSession = undefined;
+    const count = ssh_mod.listRemoteSessions(std.heap.page_allocator, name, &sessions);
+
+    if (count == 0) {
+        // Could be error or just no tmux sessions — treat as connected with 0 sessions
+        // Check if ssh itself succeeded by looking at the result
+        host.session_count = 0;
+        host.status = .connected;
+        host.expanded = true;
+    } else {
+        for (0..count) |i| {
+            host.sessions[i] = sessions[i];
+        }
+        host.session_count = count;
+        host.status = .connected;
+        host.expanded = true;
+    }
+
+    logFmt("SSH probe: {s} -> {d} sessions", .{ name, count });
+    g_redraw = true;
+    g_ssh_probe_thread = null;
+}
+
+export fn bridge_get_ssh_host_count() callconv(.c) u16 {
+    if (!g_ssh_loaded) loadSshHosts();
+    return g_ssh_host_count;
+}
+
+export fn bridge_get_ssh_host_name(idx: u16) callconv(.c) [*]const u8 {
+    if (idx < g_ssh_host_count)
+        return &g_ssh_hosts[idx].host.name;
+    return "".ptr;
+}
+
+export fn bridge_get_ssh_host_name_len(idx: u16) callconv(.c) u16 {
+    if (idx < g_ssh_host_count)
+        return g_ssh_hosts[idx].host.name_len;
+    return 0;
+}
+
+export fn bridge_get_ssh_host_status(idx: u16) callconv(.c) u8 {
+    if (idx < g_ssh_host_count)
+        return @intFromEnum(g_ssh_hosts[idx].status);
+    return 0;
+}
+
+export fn bridge_get_ssh_host_expanded(idx: u16) callconv(.c) u8 {
+    if (idx < g_ssh_host_count)
+        return if (g_ssh_hosts[idx].expanded) 1 else 0;
+    return 0;
+}
+
+export fn bridge_get_ssh_session_count(host_idx: u16) callconv(.c) u16 {
+    if (host_idx < g_ssh_host_count)
+        return g_ssh_hosts[host_idx].session_count;
+    return 0;
+}
+
+export fn bridge_get_ssh_session_name(host_idx: u16, sess_idx: u16) callconv(.c) [*]const u8 {
+    if (host_idx < g_ssh_host_count and sess_idx < g_ssh_hosts[host_idx].session_count)
+        return &g_ssh_hosts[host_idx].sessions[sess_idx].name;
+    return "".ptr;
+}
+
+export fn bridge_get_ssh_session_name_len(host_idx: u16, sess_idx: u16) callconv(.c) u16 {
+    if (host_idx < g_ssh_host_count and sess_idx < g_ssh_hosts[host_idx].session_count)
+        return g_ssh_hosts[host_idx].sessions[sess_idx].name_len;
+    return 0;
+}
+
+export fn bridge_toggle_ssh_host(idx: u16) callconv(.c) void {
+    if (idx >= g_ssh_host_count) return;
+    var host = &g_ssh_hosts[idx];
+
+    switch (host.status) {
+        .disconnected, .err => {
+            // Start connection probe in background thread
+            if (g_ssh_probe_thread != null) return; // already probing
+            host.status = .connecting;
+            g_ssh_probe_host = idx;
+            g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch {
+                host.status = .err;
+                return;
+            };
+            g_redraw = true;
+        },
+        .connecting => {
+            // Already connecting, do nothing
+        },
+        .connected => {
+            // Toggle expand/collapse
+            host.expanded = !host.expanded;
+            g_redraw = true;
+        },
+    }
+}
+
+export fn bridge_select_ssh_session(host_idx: u16, sess_idx: u16) callconv(.c) void {
+    if (host_idx >= g_ssh_host_count) return;
+    const host = &g_ssh_hosts[host_idx];
+    if (sess_idx >= host.session_count) return;
+
+    const host_name = host.host.name[0..host.host.name_len];
+    const sess_name = host.sessions[sess_idx].name[0..host.sessions[sess_idx].name_len];
+    const tmux = &(g_tmux orelse return);
+
+    // Create a local tmux session name: "host/session"
+    var name_buf: [128]u8 = undefined;
+    const local_name = std.fmt.bufPrint(&name_buf, "{s}/{s}", .{ host_name, sess_name }) catch return;
+
+    if (!g_started) {
+        // Need to start PTY first with a regular session, then create the SSH session
+        startPty(g_initial_cols, g_initial_rows);
+    }
+
+    // Create local tmux session running SSH attach
+    tmux.createSshSession(local_name, host_name, sess_name) catch |e| {
+        logFmt("Failed to create SSH session: {any}", .{e});
+        return;
+    };
+    syncState();
+    selectSessionByName(local_name);
+    g_redraw = true;
+}
+
+export fn bridge_disconnect_ssh_host(idx: u16) callconv(.c) void {
+    if (idx >= g_ssh_host_count) return;
+    g_ssh_hosts[idx].status = .disconnected;
+    g_ssh_hosts[idx].expanded = false;
+    g_ssh_hosts[idx].session_count = 0;
+    g_redraw = true;
+}
+
+export fn bridge_refresh_ssh_hosts() callconv(.c) void {
+    g_ssh_loaded = false;
+    g_ssh_host_count = 0;
+    loadSshHosts();
+    g_redraw = true;
+}
+
+export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
+    if (host_idx >= g_ssh_host_count) return;
+    const host = &g_ssh_hosts[host_idx];
+    const host_name = host.host.name[0..host.host.name_len];
+    const tmux = &(g_tmux orelse return);
+    const state = &(g_state orelse return);
+
+    // Create a local tmux session that just opens an SSH shell
+    var name_buf: [128]u8 = undefined;
+    const count = state.sessions.items.len;
+    const local_name = std.fmt.bufPrint(&name_buf, "{s}-{d}", .{ host_name, count }) catch return;
+
+    if (!g_started) {
+        startPty(g_initial_cols, g_initial_rows);
+    }
+
+    // tmux new-session -d -s NAME -- ssh HOST
+    const result = std.process.Child.run(.{
+        .allocator = g_allocator,
+        .argv = &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name },
+    }) catch return;
+    g_allocator.free(result.stdout);
+    g_allocator.free(result.stderr);
+
+    syncState();
+    selectSessionByName(local_name);
+
+    // After connecting, try to refresh remote sessions
+    if (host.status != .connected) {
+        _ = tmux; // suppress unused
+        host.status = .connecting;
+        g_ssh_probe_host = host_idx;
+        g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch {
+            host.status = .err;
+            return;
+        };
+    }
     g_redraw = true;
 }
 

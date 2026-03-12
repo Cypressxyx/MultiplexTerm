@@ -134,7 +134,8 @@ sequenceDiagram
 | `src/terminal/engine.zig` | Connects parser events to screen model. Handles CSI sequences, DEC private modes, scroll regions |
 | `src/terminal/screen.zig` | Screen buffer model: cells, cursor, scroll regions, alt screen, attributes |
 | `src/state.zig` | App state: session list, active session, sidebar visibility |
-| `src/tmux/manager.zig` | Tmux subprocess commands: list/create/kill/rename sessions, list windows/panes |
+| `src/tmux/manager.zig` | Tmux subprocess commands: list/create/kill/rename sessions, list windows/panes, create SSH sessions |
+| `src/ssh.zig` | SSH config parser (`~/.ssh/config`) and remote tmux session discovery via SSH subprocess |
 | `build.zig` | Build config: compiles Zig + ObjC, links Cocoa framework |
 
 ## E2E Data Flow
@@ -168,6 +169,15 @@ sequenceDiagram
 2. Click in terminal → sends xterm mouse protocol (ESC [ M) for tmux pane selection
 3. Drag in terminal → text selection (highlighted blue)
 4. Scroll wheel → xterm mouse wheel events (tmux mouse mode)
+
+### SSH Remote Sessions
+1. Sidebar shows "REMOTE" section (between New Session button and Recent Projects) if `~/.ssh/config` has hosts
+2. Hosts parsed by `ssh_mod.parseSshConfig()` — skips wildcard hosts (`*`, `?`)
+3. Click disconnected host → spawns background thread running `ssh -o BatchMode=yes host tmux list-sessions`
+4. If successful, host status = connected, remote tmux sessions shown expanded under host
+5. Click remote session → `tmux.createSshSession()` creates local tmux session running `ssh host -t 'tmux attach-session -t session'`
+6. The SSH session appears in the normal SESSIONS list with name "host/session"
+7. Status dots: green=connected, yellow=connecting, red=error, hollow=disconnected
 
 ### Session Exit / HUP
 1. PTY HUP detected → `reattachOrQuit()`
@@ -259,6 +269,9 @@ zig build test
 # - Recent projects section appears in sidebar after visiting directories
 # - Clicking a recent project creates a new session in that directory
 # - Running Claude Code → sidebar should show "Claude Code", not a version number
+# - SSH: REMOTE section shows hosts from ~/.ssh/config
+# - SSH: Click host → status changes to connecting, then shows remote tmux sessions
+# - SSH: Click remote session → creates local tmux session with SSH attach, appears in sessions list
 
 # Logs
 cat /tmp/mterm.log
@@ -279,4 +292,6 @@ cat /tmp/mterm.log
 - **Finder/Raycast launch PATH**: macOS GUI apps get a minimal PATH (`/usr/bin:/bin`). Homebrew paths (`/opt/homebrew/bin`, `/usr/local/bin`) must be added at startup in `applicationDidFinishLaunching` or tmux won't be found.
 - **Finder/Raycast launch cwd**: When launched from Finder/Raycast, cwd is `/`. `basename("/")` is empty, which gives tmux an invalid session name. ALL code that derives names from cwd (`startPty`, `bridge_create_session`) must fall back to HOME basename or "mterm".
 - **Finder/Raycast launch locale**: Without `LANG`/`LC_ALL` set, tmux uses VT100 line-drawing escape sequences instead of UTF-8 box-drawing characters, causing garbled rendering. Must set `LANG=en_US.UTF-8` at startup.
-- **Sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all compute the same flow layout: sessions → "+ New Session" button → recent projects header → recent project rows. Never bottom-anchor the button.
+- **Sidebar layout consistency**: `drawSidebar`, `mouseDown:`, `mouseMoved:`, and `rightMouseDown:` must all compute the same flow layout: sessions → "+ New Session" button → SSH remote section → recent projects header → recent project rows. Never bottom-anchor the button.
+- **SSH probe thread safety**: The SSH connection probe runs in a background thread (`sshProbeThreadFn`). It writes to `g_ssh_hosts[idx]` fields and sets `status = .connected` LAST so the main thread sees consistent state. Uses `std.heap.page_allocator` (thread-safe) for the subprocess.
+- **SSH session naming**: Remote sessions create local tmux sessions named "host/session". This doesn't match any auto-generated pattern so `isAutoNameWithPath` treats it as user-renamed and shows it as-is in the sidebar.

@@ -48,6 +48,20 @@ extern const uint8_t* bridge_get_recent_project_path(uint16_t idx);
 extern uint16_t bridge_get_recent_project_path_len(uint16_t idx);
 extern void bridge_create_session_in_dir(const uint8_t* path, uint16_t len);
 extern void bridge_remove_recent_project(uint16_t idx);
+// SSH remote hosts
+extern uint16_t bridge_get_ssh_host_count(void);
+extern const uint8_t* bridge_get_ssh_host_name(uint16_t idx);
+extern uint16_t bridge_get_ssh_host_name_len(uint16_t idx);
+extern uint8_t bridge_get_ssh_host_status(uint16_t idx);  // 0=disconnected, 1=connecting, 2=connected, 3=error
+extern uint8_t bridge_get_ssh_host_expanded(uint16_t idx);
+extern uint16_t bridge_get_ssh_session_count(uint16_t host_idx);
+extern const uint8_t* bridge_get_ssh_session_name(uint16_t host_idx, uint16_t sess_idx);
+extern uint16_t bridge_get_ssh_session_name_len(uint16_t host_idx, uint16_t sess_idx);
+extern void bridge_toggle_ssh_host(uint16_t idx);
+extern void bridge_select_ssh_session(uint16_t host_idx, uint16_t sess_idx);
+extern void bridge_disconnect_ssh_host(uint16_t idx);
+extern void bridge_refresh_ssh_hosts(void);
+extern void bridge_create_ssh_shell(uint16_t host_idx);
 
 // === Layout constants ===
 static const CGFloat kSidebarWidth    = 220.0;
@@ -179,6 +193,8 @@ static NSColor* colorFromU32(uint32_t c, NSColor* def) {
 @property (nonatomic, strong) NSTimer* tickTimer;
 @property (nonatomic) NSInteger hoveredSession; // -1 = none
 @property (nonatomic) NSInteger hoveredRecentProject; // -1 = none
+@property (nonatomic) NSInteger hoveredSshHost; // -1 = none
+@property (nonatomic) NSInteger hoveredSshSession; // encoded: host_idx * 100 + sess_idx, -1 = none
 @property (nonatomic) NSInteger closeArmedSession; // -1 = none (first click turns red, second click deletes)
 @property (nonatomic) BOOL cursorBlink;
 @property (nonatomic) NSUInteger blinkCounter;
@@ -249,6 +265,8 @@ static NSString* const kPaletteHints[] = {
 
         self.hoveredSession = -1;
         self.hoveredRecentProject = -1;
+        self.hoveredSshHost = -1;
+        self.hoveredSshSession = -1;
         self.closeArmedSession = -1;
         self.cursorBlink = YES;
         self.blinkCounter = 0;
@@ -443,6 +461,118 @@ static NSString* const kPaletteHints[] = {
     CGFloat btnTextY = btnY + (kNewBtnHeight - btnSz.height) / 2;
     [btnText drawAtPoint:NSMakePoint(btnTextX, btnTextY) withAttributes:btnAttrs];
     y = btnY + kNewBtnHeight;
+
+    // SSH Remote section
+    uint16_t sshCount = bridge_get_ssh_host_count();
+    if (sshCount > 0) {
+        [g_border setFill];
+        NSRectFill(NSMakeRect(0, y, sw, 1));
+        [@"REMOTE" drawAtPoint:NSMakePoint(kSidebarPadH, y + 8) withAttributes:headerAttrs];
+        y += kRecentHeaderH;
+
+        for (uint16_t hi = 0; hi < sshCount; hi++) {
+            if (y + kSessionRowH > h) break;
+            uint8_t status = bridge_get_ssh_host_status(hi);
+            uint8_t expanded = bridge_get_ssh_host_expanded(hi);
+
+            // Host row
+            NSRect hostRect = NSMakeRect(0, y, sw - 1, kSessionRowH);
+            if (self.hoveredSshHost == hi) {
+                [g_hoverBg setFill];
+                NSRectFill(hostRect);
+            }
+
+            // Status indicator
+            CGFloat dotX = kSidebarPadH;
+            CGFloat dotY = y + (kSessionRowH - 6) / 2;
+            NSColor* dotColor;
+            switch (status) {
+                case 2: dotColor = g_green; break;       // connected
+                case 1: dotColor = g_accent; break;      // connecting
+                case 3: dotColor = hexColor(0xFF4444); break;  // error
+                default: dotColor = g_textMuted; break;  // disconnected
+            }
+            NSBezierPath* dot = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(dotX, dotY, 6, 6)];
+            [dotColor setFill];
+            [dot fill];
+            if (status == 0) {
+                // Hollow dot for disconnected
+                [g_sidebarBg setFill];
+                [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(dotX + 1.5, dotY + 1.5, 3, 3)] fill];
+            }
+
+            // Expand arrow for connected hosts
+            if (status == 2) {
+                NSString* arrow = expanded ? @"\u25BE" : @"\u25B8"; // ▾ or ▸
+                NSDictionary* arrowAttrs = @{
+                    NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightMedium],
+                    NSForegroundColorAttributeName: g_textMuted,
+                };
+                [arrow drawAtPoint:NSMakePoint(sw - 24, y + (kSessionRowH - 12) / 2) withAttributes:arrowAttrs];
+            }
+
+            // Spinner-like indicator for connecting
+            if (status == 1) {
+                NSDictionary* spinAttrs = @{
+                    NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightMedium],
+                    NSForegroundColorAttributeName: g_accent,
+                };
+                [@"\u21BB" drawAtPoint:NSMakePoint(sw - 24, y + (kSessionRowH - 12) / 2) withAttributes:spinAttrs]; // ↻
+            }
+
+            // Host name
+            uint16_t nameLen = bridge_get_ssh_host_name_len(hi);
+            const uint8_t* namePtr = bridge_get_ssh_host_name(hi);
+            NSString* hostName = [[NSString alloc] initWithBytes:namePtr length:nameLen encoding:NSUTF8StringEncoding];
+            if (!hostName) hostName = @"?";
+
+            NSDictionary* hostNameAttrs = @{
+                NSFontAttributeName: self.uiFont,
+                NSForegroundColorAttributeName: status == 2 ? g_text : g_textDim,
+            };
+            [hostName drawAtPoint:NSMakePoint(kSidebarPadH + 14, y + (kSessionRowH - 16) / 2) withAttributes:hostNameAttrs];
+
+            y += kSessionRowH;
+
+            // Draw remote sessions if expanded
+            if (expanded && status == 2) {
+                uint16_t sessCount = bridge_get_ssh_session_count(hi);
+                if (sessCount == 0) {
+                    // Show "No tmux sessions" hint
+                    NSDictionary* emptyAttrs = @{
+                        NSFontAttributeName: self.uiFont,
+                        NSForegroundColorAttributeName: g_textMuted,
+                    };
+                    [@"  No tmux sessions" drawAtPoint:NSMakePoint(kSidebarPadH + 14, y + (kRecentRowH - 14) / 2) withAttributes:emptyAttrs];
+                    y += kRecentRowH;
+                } else {
+                    for (uint16_t si = 0; si < sessCount; si++) {
+                        if (y + kRecentRowH > h) break;
+
+                        NSRect sessRect = NSMakeRect(0, y, sw - 1, kRecentRowH);
+                        NSInteger encodedSess = hi * 100 + si;
+                        if (self.hoveredSshSession == encodedSess) {
+                            [g_hoverBg setFill];
+                            NSRectFill(sessRect);
+                        }
+
+                        uint16_t sNameLen = bridge_get_ssh_session_name_len(hi, si);
+                        const uint8_t* sNamePtr = bridge_get_ssh_session_name(hi, si);
+                        NSString* sessName = [[NSString alloc] initWithBytes:sNamePtr length:sNameLen encoding:NSUTF8StringEncoding];
+                        if (!sessName) sessName = @"?";
+
+                        NSDictionary* sessAttrs = @{
+                            NSFontAttributeName: self.uiFont,
+                            NSForegroundColorAttributeName: g_textDim,
+                        };
+                        // Indented under host
+                        [sessName drawAtPoint:NSMakePoint(kSidebarPadH + 26, y + (kRecentRowH - 14) / 2) withAttributes:sessAttrs];
+                        y += kRecentRowH;
+                    }
+                }
+            }
+        }
+    }
 
     // Recent Projects section (always shown)
     uint16_t rpCount = bridge_get_recent_project_count();
@@ -1185,10 +1315,51 @@ static NSString* const kPaletteHints[] = {
             return;
         }
 
-        // Recent projects click
+        // Compute SSH section layout (same flow as drawSidebar)
+        CGFloat sshY = btnEnd;
+        uint16_t sshCount = bridge_get_ssh_host_count();
+        if (sshCount > 0) {
+            CGFloat sshHeaderEnd = sshY + kRecentHeaderH; // REMOTE header
+            if (p.y >= sshY && p.y < sshHeaderEnd) {
+                return; // click on header, ignore
+            }
+            CGFloat sshItemY = sshHeaderEnd;
+            for (uint16_t hi = 0; hi < sshCount; hi++) {
+                uint8_t status = bridge_get_ssh_host_status(hi);
+                uint8_t expanded = bridge_get_ssh_host_expanded(hi);
+
+                // Host row
+                if (p.y >= sshItemY && p.y < sshItemY + kSessionRowH) {
+                    bridge_toggle_ssh_host(hi);
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+                sshItemY += kSessionRowH;
+
+                // Remote sessions under expanded host
+                if (expanded && status == 2) {
+                    uint16_t sessCount = bridge_get_ssh_session_count(hi);
+                    if (sessCount == 0) {
+                        sshItemY += kRecentRowH; // "No tmux sessions" row
+                    } else {
+                        for (uint16_t si = 0; si < sessCount; si++) {
+                            if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
+                                bridge_select_ssh_session(hi, si);
+                                [self setNeedsDisplay:YES];
+                                return;
+                            }
+                            sshItemY += kRecentRowH;
+                        }
+                    }
+                }
+            }
+            sshY = sshItemY;
+        }
+
+        // Recent projects click (after SSH section)
         uint16_t rpCount = bridge_get_recent_project_count();
         if (rpCount > 0) {
-            CGFloat rpStart = btnEnd + kRecentHeaderH; // after header
+            CGFloat rpStart = sshY + kRecentHeaderH; // after RECENT PROJECTS header
             if (p.y >= rpStart) {
                 uint16_t rpIdx = (uint16_t)((p.y - rpStart) / kRecentRowH);
                 if (rpIdx < rpCount) {
@@ -1378,10 +1549,14 @@ static NSString* const kPaletteHints[] = {
 
     NSInteger oldSession = self.hoveredSession;
     NSInteger oldRecent = self.hoveredRecentProject;
+    NSInteger oldSshHost = self.hoveredSshHost;
+    NSInteger oldSshSession = self.hoveredSshSession;
     CGFloat listTop = kTitlebarInset + kHeaderHeight;
 
     self.hoveredSession = -1;
     self.hoveredRecentProject = -1;
+    self.hoveredSshHost = -1;
+    self.hoveredSshSession = -1;
 
     // Empty state recent projects hover (offset by 1000 to distinguish from sidebar)
     if (!bridge_is_started()) {
@@ -1418,19 +1593,57 @@ static NSString* const kPaletteHints[] = {
             NSInteger idx = (NSInteger)((p.y - listTop) / kSessionRowH);
             if (idx < count) self.hoveredSession = idx;
         } else {
-            // Check recent projects area
-            uint16_t rpCount = bridge_get_recent_project_count();
-            if (rpCount > 0) {
-                CGFloat rpStart = btnEnd + kRecentHeaderH;
-                if (p.y >= rpStart) {
-                    NSInteger rpIdx = (NSInteger)((p.y - rpStart) / kRecentRowH);
-                    if (rpIdx >= 0 && rpIdx < rpCount) self.hoveredRecentProject = rpIdx;
+            // Walk SSH section layout to determine hover
+            CGFloat sshY = btnEnd;
+            uint16_t sshCount = bridge_get_ssh_host_count();
+            BOOL inSsh = NO;
+            if (sshCount > 0) {
+                CGFloat sshItemY = sshY + kRecentHeaderH; // after REMOTE header
+                for (uint16_t hi = 0; hi < sshCount; hi++) {
+                    uint8_t status = bridge_get_ssh_host_status(hi);
+                    uint8_t expanded = bridge_get_ssh_host_expanded(hi);
+                    // Host row
+                    if (p.y >= sshItemY && p.y < sshItemY + kSessionRowH) {
+                        self.hoveredSshHost = hi;
+                        inSsh = YES;
+                        break;
+                    }
+                    sshItemY += kSessionRowH;
+                    if (expanded && status == 2) {
+                        uint16_t sessCount = bridge_get_ssh_session_count(hi);
+                        if (sessCount == 0) {
+                            sshItemY += kRecentRowH;
+                        } else {
+                            for (uint16_t si = 0; si < sessCount; si++) {
+                                if (p.y >= sshItemY && p.y < sshItemY + kRecentRowH) {
+                                    self.hoveredSshSession = hi * 100 + si;
+                                    inSsh = YES;
+                                    break;
+                                }
+                                sshItemY += kRecentRowH;
+                            }
+                            if (inSsh) break;
+                        }
+                    }
+                }
+                sshY = sshItemY;
+            }
+            // Check recent projects area (after SSH section)
+            if (!inSsh) {
+                uint16_t rpCount = bridge_get_recent_project_count();
+                if (rpCount > 0) {
+                    CGFloat rpStart = sshY + kRecentHeaderH;
+                    if (p.y >= rpStart) {
+                        NSInteger rpIdx = (NSInteger)((p.y - rpStart) / kRecentRowH);
+                        if (rpIdx >= 0 && rpIdx < rpCount) self.hoveredRecentProject = rpIdx;
+                    }
                 }
             }
         }
     }
 
-    if (oldSession != self.hoveredSession || oldRecent != self.hoveredRecentProject) {
+    if (oldSession != self.hoveredSession || oldRecent != self.hoveredRecentProject ||
+        oldSshHost != self.hoveredSshHost || oldSshSession != self.hoveredSshSession) {
         [self setNeedsDisplay:YES];
     }
 
