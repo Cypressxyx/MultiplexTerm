@@ -143,7 +143,7 @@ pub const TmuxManager = struct {
     pub fn createSshSession(self: *const TmuxManager, session_name: []const u8, ssh_host: []const u8, remote_session: []const u8) !void {
         // Build: ssh HOST -t 'tmux attach-session -t SESSION'
         var cmd_buf: [512]u8 = undefined;
-        const ssh_cmd = std.fmt.bufPrint(&cmd_buf, "tmux attach-session -t '{s}'", .{remote_session}) catch return error.TmuxCommandFailed;
+        const ssh_cmd = std.fmt.bufPrint(&cmd_buf, "tmux attach-session -t '{s}' \\; set-option mouse on", .{remote_session}) catch return error.TmuxCommandFailed;
 
         const result = std.process.Child.run(.{
             .allocator = self.allocator,

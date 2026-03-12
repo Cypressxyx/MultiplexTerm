@@ -928,22 +928,64 @@ export fn bridge_get_ssh_host_expanded(idx: u16) callconv(.c) u8 {
     return 0;
 }
 
+/// Check if a remote probe session is already attached via a local SSH session.
+/// A remote session "foo" is attached if there's a local session "ssh_HOST/foo".
+fn isRemoteSessionAttached(host_idx: u16, sess_idx: u16) bool {
+    if (host_idx >= g_ssh_host_count) return false;
+    const host = &g_ssh_hosts[host_idx];
+    if (sess_idx >= host.session_count) return false;
+    const sess_name = host.sessions[sess_idx].name[0..host.sessions[sess_idx].name_len];
+    const host_name = host.host.name[0..host.host.name_len];
+    const state = &(g_state orelse return false);
+
+    // Check if any local session is "ssh_HOST/SESSION"
+    for (state.sessions.items) |session| {
+        const sn = session.name;
+        if (sn.len < 5 + host_name.len) continue;
+        if (!std.mem.eql(u8, sn[0..4], "ssh_")) continue;
+        if (!std.mem.eql(u8, sn[4 .. 4 + host_name.len], host_name)) continue;
+        if (sn.len <= 4 + host_name.len) continue;
+        if (sn[4 + host_name.len] != '/') continue;
+        const attached_sess = sn[4 + host_name.len + 1 ..];
+        if (std.mem.eql(u8, attached_sess, sess_name)) return true;
+    }
+    return false;
+}
+
+/// Map a filtered (unattached) session index to a raw probe index.
+fn mapFilteredSshSession(host_idx: u16, filtered_idx: u16) u16 {
+    if (host_idx >= g_ssh_host_count) return 0xFFFF;
+    const host = &g_ssh_hosts[host_idx];
+    var count: u16 = 0;
+    for (0..host.session_count) |i| {
+        if (!isRemoteSessionAttached(host_idx, @intCast(i))) {
+            if (count == filtered_idx) return @intCast(i);
+            count += 1;
+        }
+    }
+    return 0xFFFF;
+}
+
 export fn bridge_get_ssh_session_count(host_idx: u16) callconv(.c) u16 {
-    if (host_idx < g_ssh_host_count)
-        return g_ssh_hosts[host_idx].session_count;
-    return 0;
+    if (host_idx >= g_ssh_host_count) return 0;
+    const host = &g_ssh_hosts[host_idx];
+    var count: u16 = 0;
+    for (0..host.session_count) |i| {
+        if (!isRemoteSessionAttached(host_idx, @intCast(i))) count += 1;
+    }
+    return count;
 }
 
 export fn bridge_get_ssh_session_name(host_idx: u16, sess_idx: u16) callconv(.c) [*]const u8 {
-    if (host_idx < g_ssh_host_count and sess_idx < g_ssh_hosts[host_idx].session_count)
-        return &g_ssh_hosts[host_idx].sessions[sess_idx].name;
-    return "".ptr;
+    const raw = mapFilteredSshSession(host_idx, sess_idx);
+    if (raw == 0xFFFF) return "".ptr;
+    return &g_ssh_hosts[host_idx].sessions[raw].name;
 }
 
 export fn bridge_get_ssh_session_name_len(host_idx: u16, sess_idx: u16) callconv(.c) u16 {
-    if (host_idx < g_ssh_host_count and sess_idx < g_ssh_hosts[host_idx].session_count)
-        return g_ssh_hosts[host_idx].sessions[sess_idx].name_len;
-    return 0;
+    const raw = mapFilteredSshSession(host_idx, sess_idx);
+    if (raw == 0xFFFF) return 0;
+    return g_ssh_hosts[host_idx].sessions[raw].name_len;
 }
 
 export fn bridge_toggle_ssh_host(idx: u16) callconv(.c) void {
@@ -985,10 +1027,12 @@ export fn bridge_toggle_ssh_host(idx: u16) callconv(.c) void {
 export fn bridge_select_ssh_session(host_idx: u16, sess_idx: u16) callconv(.c) void {
     if (host_idx >= g_ssh_host_count) return;
     const host = &g_ssh_hosts[host_idx];
-    if (sess_idx >= host.session_count) return;
+    // Map filtered index to raw probe index
+    const raw_idx = mapFilteredSshSession(host_idx, sess_idx);
+    if (raw_idx == 0xFFFF) return;
 
     const host_name = host.host.name[0..host.host.name_len];
-    const sess_name = host.sessions[sess_idx].name[0..host.sessions[sess_idx].name_len];
+    const sess_name = host.sessions[raw_idx].name[0..host.sessions[raw_idx].name_len];
     const tmux = &(g_tmux orelse return);
 
     // Create a local tmux session name: "ssh:host/session"
@@ -1045,7 +1089,7 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
     // destroy-unattached ensures the remote session is killed when SSH disconnects
     const result = std.process.Child.run(.{
         .allocator = g_allocator,
-        .argv = &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name, "-t", "tmux new-session \\; set-option destroy-unattached on" },
+        .argv = &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name, "-t", "tmux new-session \\; set-option destroy-unattached on \\; set-option mouse on" },
     }) catch return;
     g_allocator.free(result.stdout);
     g_allocator.free(result.stderr);
@@ -1122,10 +1166,12 @@ export fn bridge_remove_ssh_host(idx: u16) callconv(.c) void {
 export fn bridge_kill_remote_session(host_idx: u16, sess_idx: u16) callconv(.c) void {
     if (host_idx >= g_ssh_host_count) return;
     const host = &g_ssh_hosts[host_idx];
-    if (sess_idx >= host.session_count) return;
+    // Map filtered index to raw probe index
+    const raw_idx = mapFilteredSshSession(host_idx, sess_idx);
+    if (raw_idx == 0xFFFF) return;
 
     const host_name = host.host.name[0..host.host.name_len];
-    const sess_name = host.sessions[sess_idx].name[0..host.sessions[sess_idx].name_len];
+    const sess_name = host.sessions[raw_idx].name[0..host.sessions[raw_idx].name_len];
 
     logFmt("Killing remote session {s} on {s}", .{ sess_name, host_name });
 
@@ -1400,6 +1446,19 @@ export fn bridge_tmux_command(cmd_id: u8) callconv(.c) void {
 }
 
 fn runTmuxCmd(cmd_id: u8) void {
+    // Check if active session is an SSH session — if so, forward to remote tmux
+    if (g_state) |*state| {
+        if (state.active_session_idx) |idx| {
+            if (idx < state.sessions.items.len) {
+                const name = state.sessions.items[idx].name;
+                if (name.len >= 4 and std.mem.eql(u8, name[0..4], "ssh_")) {
+                    runRemoteTmuxCmd(cmd_id, name);
+                    return;
+                }
+            }
+        }
+    }
+
     const result = switch (cmd_id) {
         0 => std.process.Child.run(.{ .allocator = g_allocator, .argv = &.{ "tmux", "split-window", "-h" } }),
         1 => std.process.Child.run(.{ .allocator = g_allocator, .argv = &.{ "tmux", "split-window", "-v" } }),
@@ -1411,6 +1470,76 @@ fn runTmuxCmd(cmd_id: u8) void {
         7 => std.process.Child.run(.{ .allocator = g_allocator, .argv = &.{ "tmux", "resize-pane", "-Z" } }),
         else => return,
     } catch return;
+    g_allocator.free(result.stdout);
+    g_allocator.free(result.stderr);
+    syncState();
+    g_redraw = true;
+}
+
+/// Forward a tmux command to the remote tmux server via SSH.
+/// Session name is like "ssh_HOST/SESSION" or "ssh_HOST-N".
+fn runRemoteTmuxCmd(cmd_id: u8, session_name: []const u8) void {
+    // Extract host name from "ssh_HOST/SESSION" or "ssh_HOST-N"
+    const after_prefix = session_name[4..]; // skip "ssh_"
+    var host_end: usize = after_prefix.len;
+    var remote_session: ?[]const u8 = null;
+    for (after_prefix, 0..) |c, i| {
+        if (c == '/') {
+            host_end = i;
+            remote_session = after_prefix[i + 1 ..];
+            break;
+        } else if (c == '-') {
+            // Could be part of hostname or the separator — check if rest is digits
+            const rest = after_prefix[i + 1 ..];
+            var all_digits = rest.len > 0;
+            for (rest) |d| {
+                if (d < '0' or d > '9') {
+                    all_digits = false;
+                    break;
+                }
+            }
+            if (all_digits) {
+                host_end = i;
+                break;
+            }
+        }
+    }
+    const host_name = after_prefix[0..host_end];
+    if (host_name.len == 0) return;
+
+    // Build the remote tmux command string
+    var cmd_buf: [256]u8 = undefined;
+    const remote_cmd = if (remote_session) |sess|
+        switch (cmd_id) {
+            0 => std.fmt.bufPrint(&cmd_buf, "tmux split-window -h -t '{s}'", .{sess}),
+            1 => std.fmt.bufPrint(&cmd_buf, "tmux split-window -v -t '{s}'", .{sess}),
+            2 => std.fmt.bufPrint(&cmd_buf, "tmux new-window -t '{s}'", .{sess}),
+            3 => std.fmt.bufPrint(&cmd_buf, "tmux next-window -t '{s}'", .{sess}),
+            4 => std.fmt.bufPrint(&cmd_buf, "tmux previous-window -t '{s}'", .{sess}),
+            5 => std.fmt.bufPrint(&cmd_buf, "tmux select-pane -t '{s}'::.+", .{sess}),
+            6 => std.fmt.bufPrint(&cmd_buf, "tmux kill-pane -t '{s}'", .{sess}),
+            7 => std.fmt.bufPrint(&cmd_buf, "tmux resize-pane -Z -t '{s}'", .{sess}),
+            else => return,
+        }
+    else
+        switch (cmd_id) {
+            0 => std.fmt.bufPrint(&cmd_buf, "tmux split-window -h", .{}),
+            1 => std.fmt.bufPrint(&cmd_buf, "tmux split-window -v", .{}),
+            2 => std.fmt.bufPrint(&cmd_buf, "tmux new-window", .{}),
+            3 => std.fmt.bufPrint(&cmd_buf, "tmux next-window", .{}),
+            4 => std.fmt.bufPrint(&cmd_buf, "tmux previous-window", .{}),
+            5 => std.fmt.bufPrint(&cmd_buf, "tmux select-pane -t :.+", .{}),
+            6 => std.fmt.bufPrint(&cmd_buf, "tmux kill-pane", .{}),
+            7 => std.fmt.bufPrint(&cmd_buf, "tmux resize-pane -Z", .{}),
+            else => return,
+        };
+
+    const cmd_str = remote_cmd catch return;
+
+    const result = std.process.Child.run(.{
+        .allocator = g_allocator,
+        .argv = &.{ "ssh", "-o", "ConnectTimeout=5", host_name, cmd_str },
+    }) catch return;
     g_allocator.free(result.stdout);
     g_allocator.free(result.stderr);
     syncState();
