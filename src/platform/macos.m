@@ -50,7 +50,47 @@ static const CGFloat kAccentBarW      = 3.0;
 static const CGFloat kTermPadLeft     = 4.0;
 static const CGFloat kTitlebarInset   = 28.0; // space for traffic light buttons
 
-// === Theme colors (Vercel dark) ===
+// === Theme system ===
+typedef struct {
+    const char* name;
+    uint32_t bg;
+    uint32_t fg;
+    uint32_t sidebar;
+    uint32_t border;
+    uint32_t accent;
+    uint32_t green;
+} ThemeDef;
+
+static const int kThemeCount = 25;
+static const ThemeDef kThemes[] = {
+    { "Vercel Dark",      0x0A0A0A, 0xEDEDED, 0x111111, 0x2A2A2A, 0xFAFAFA, 0x50E3C2 },
+    { "Gruvbox Dark",     0x282828, 0xEBDBB2, 0x1D2021, 0x504945, 0xFABD2F, 0xB8BB26 },
+    { "Gruvbox Light",    0xFBF1C7, 0x3C3836, 0xF2E5BC, 0xD5C4A1, 0xD65D0E, 0x98971A },
+    { "Catppuccin Mocha", 0x1E1E2E, 0xCDD6F4, 0x181825, 0x313244, 0xCBA6F7, 0xA6E3A1 },
+    { "Catppuccin Latte", 0xEFF1F5, 0x4C4F69, 0xE6E9EF, 0xCCD0DA, 0x8839EF, 0x40A02B },
+    { "Kanagawa",         0x1F1F28, 0xDCD7BA, 0x16161D, 0x54546D, 0x7E9CD8, 0x76946A },
+    { "Kanagawa Light",   0xF2ECBC, 0x1F1F28, 0xE7DBA0, 0xC8C093, 0x4E8CA2, 0x6F894E },
+    { "Nord",             0x2E3440, 0xD8DEE9, 0x272C36, 0x3B4252, 0x88C0D0, 0xA3BE8C },
+    { "Dracula",          0x282A36, 0xF8F8F2, 0x21222C, 0x44475A, 0xBD93F9, 0x50FA7B },
+    { "One Dark",         0x282C34, 0xABB2BF, 0x21252B, 0x3E4451, 0x61AFEF, 0x98C379 },
+    { "One Light",        0xFAFAFA, 0x383A42, 0xF0F0F0, 0xD0D0D0, 0x4078F2, 0x50A14F },
+    { "Solarized Dark",   0x002B36, 0x839496, 0x00212B, 0x073642, 0x268BD2, 0x859900 },
+    { "Solarized Light",  0xFDF6E3, 0x657B83, 0xEEE8D5, 0x93A1A1, 0x268BD2, 0x859900 },
+    { "Tokyo Night",      0x1A1B26, 0xA9B1D6, 0x16161E, 0x3B4261, 0x7AA2F7, 0x9ECE6A },
+    { "Tokyo Night Light",0xD5D6DB, 0x343B58, 0xCBCCD1, 0x9699A3, 0x34548A, 0x485E30 },
+    { u8"Rosé Pine",      0x191724, 0xE0DEF4, 0x1F1D2E, 0x26233A, 0xC4A7E7, 0x9CCFD8 },
+    { u8"Rosé Pine Dawn", 0xFAF4ED, 0x575279, 0xF2E9E1, 0xDFDAD9, 0x907AA9, 0x56949F },
+    { "Everforest Dark",  0x2D353B, 0xD3C6AA, 0x272E33, 0x475258, 0xA7C080, 0xA7C080 },
+    { "Everforest Light", 0xFDF6E3, 0x5C6A72, 0xF3EAD3, 0xD4C495, 0x8DA101, 0x8DA101 },
+    { "Monokai Pro",      0x2D2A2E, 0xFCFCFA, 0x221F22, 0x403E41, 0xFFD866, 0xA9DC76 },
+    { "Ayu Dark",         0x0A0E14, 0xB3B1AD, 0x07090D, 0x11151C, 0xE6B450, 0xAAD94C },
+    { "Ayu Light",        0xFAFAFA, 0x575F66, 0xF0F0F0, 0xD8D8D8, 0xF2AE49, 0x86B300 },
+    { "Nightfox",         0x192330, 0xCDCECF, 0x131A24, 0x2B3B51, 0x719CD6, 0x81B29A },
+    { "Synthwave '84",    0x262335, 0xFFFFFF, 0x1E1A2E, 0x34294F, 0xFF7EDB, 0x72F1B8 },
+    { "GitHub Dark",      0x0D1117, 0xC9D1D9, 0x010409, 0x21262D, 0x58A6FF, 0x3FB950 },
+};
+
+static int g_currentTheme = 0;
 static NSColor* g_bg;
 static NSColor* g_sidebarBg;
 static NSColor* g_border;
@@ -71,19 +111,35 @@ static NSColor* hexColor(uint32_t hex) {
                                alpha:1.0];
 }
 
+// Compute a color between two hex values (blend towards `to` by `t` factor 0-1)
+static uint32_t blendHex(uint32_t from, uint32_t to, float t) {
+    int r = (int)(((from >> 16) & 0xFF) * (1-t) + ((to >> 16) & 0xFF) * t);
+    int g = (int)(((from >> 8) & 0xFF) * (1-t) + ((to >> 8) & 0xFF) * t);
+    int b = (int)((from & 0xFF) * (1-t) + (to & 0xFF) * t);
+    return ((r & 0xFF) << 16) | ((g & 0xFF) << 8) | (b & 0xFF);
+}
+
+static void applyTheme(int idx) {
+    if (idx < 0 || idx >= kThemeCount) return;
+    g_currentTheme = idx;
+    const ThemeDef* t = &kThemes[idx];
+
+    g_bg         = hexColor(t->bg);
+    g_sidebarBg  = hexColor(t->sidebar);
+    g_border     = hexColor(t->border);
+    g_text       = hexColor(t->fg);
+    g_textDim    = hexColor(blendHex(t->fg, t->bg, 0.45));
+    g_textMuted  = hexColor(blendHex(t->fg, t->bg, 0.65));
+    g_selectedBg = hexColor(blendHex(t->sidebar, t->fg, 0.07));
+    g_hoverBg    = hexColor(blendHex(t->sidebar, t->fg, 0.04));
+    g_accent     = hexColor(t->accent);
+    g_green      = hexColor(t->green);
+    g_cursor     = hexColor(t->accent);
+    g_defaultFg  = hexColor(t->fg);
+}
+
 static void initTheme(void) {
-    g_bg         = hexColor(0x0A0A0A);
-    g_sidebarBg  = hexColor(0x111111);
-    g_border     = hexColor(0x2A2A2A);
-    g_text       = hexColor(0xEDEDED);
-    g_textDim    = hexColor(0x888888);
-    g_textMuted  = hexColor(0x555555);
-    g_selectedBg = hexColor(0x1A1A1A);
-    g_hoverBg    = hexColor(0x161616);
-    g_accent     = hexColor(0xFAFAFA);
-    g_green      = hexColor(0x50E3C2);
-    g_cursor     = hexColor(0xFAFAFA);
-    g_defaultFg  = hexColor(0xEDEDED);
+    applyTheme(0); // Default: Vercel Dark
 }
 
 static NSColor* colorFromU32(uint32_t c, NSColor* def) {
@@ -121,9 +177,11 @@ static NSColor* colorFromU32(uint32_t c, NSColor* def) {
 // Command palette
 @property (nonatomic) BOOL paletteVisible;
 @property (nonatomic) NSInteger paletteSelection;
+@property (nonatomic) NSInteger paletteMode; // 0 = commands, 1 = themes
+@property (nonatomic) NSInteger themeScroll; // scroll offset for theme list
 @end
 
-static const int kPaletteItemCount = 8;
+static const int kPaletteItemCount = 9; // 8 commands + 1 theme
 static NSString* const kPaletteLabels[] = {
     @"Split Pane Right",
     @"Split Pane Down",
@@ -133,6 +191,7 @@ static NSString* const kPaletteLabels[] = {
     @"Next Pane",
     @"Close Pane",
     @"Toggle Zoom",
+    @"Theme...",
 };
 static NSString* const kPaletteHints[] = {
     @"\u2502",  // │
@@ -143,6 +202,7 @@ static NSString* const kPaletteHints[] = {
     @"\u21BB",  // ↻
     @"\u00D7",  // ×
     @"\u2922",  // ⤢
+    @"\u25CF",  // ●
 };
 
 @implementation STTerminalView
@@ -176,6 +236,8 @@ static NSString* const kPaletteHints[] = {
         self.isDragging = NO;
         self.paletteVisible = NO;
         self.paletteSelection = 0;
+        self.paletteMode = 0;
+        self.themeScroll = 0;
     }
     return self;
 }
@@ -381,6 +443,11 @@ static NSString* const kPaletteHints[] = {
     [[NSColor colorWithWhite:0 alpha:0.5] setFill];
     NSRectFill(self.bounds);
 
+    if (self.paletteMode == 1) {
+        [self drawThemePicker];
+        return;
+    }
+
     // Palette card
     CGFloat cardW = 320;
     CGFloat rowH = 38;
@@ -394,23 +461,19 @@ static NSString* const kPaletteHints[] = {
     [hexColor(0x141414) setFill];
     [cardPath fill];
 
-    // Card border
     [hexColor(0x2A2A2A) setStroke];
     cardPath.lineWidth = 1;
     [cardPath stroke];
 
-    // Title
     NSDictionary* titleAttrs = @{
         NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold],
         NSForegroundColorAttributeName: g_text,
     };
     [@"Commands" drawAtPoint:NSMakePoint(cardX + 20, cardY + 14) withAttributes:titleAttrs];
 
-    // Separator
     [hexColor(0x2A2A2A) setFill];
     NSRectFill(NSMakeRect(cardX, cardY + headerH, cardW, 1));
 
-    // Items
     CGFloat itemY = cardY + headerH + 4;
     for (int i = 0; i < kPaletteItemCount; i++) {
         BOOL sel = (self.paletteSelection == i);
@@ -422,19 +485,117 @@ static NSString* const kPaletteHints[] = {
             [rowBg fill];
         }
 
-        // Icon/hint on left
         NSDictionary* hintAttrs = @{
             NSFontAttributeName: [NSFont monospacedSystemFontOfSize:15 weight:NSFontWeightMedium],
             NSForegroundColorAttributeName: sel ? g_green : g_textMuted,
         };
         [kPaletteHints[i] drawAtPoint:NSMakePoint(cardX + 20, itemY + 9) withAttributes:hintAttrs];
 
-        // Label
         NSDictionary* labelAttrs = @{
             NSFontAttributeName: [NSFont systemFontOfSize:13 weight:sel ? NSFontWeightMedium : NSFontWeightRegular],
             NSForegroundColorAttributeName: sel ? g_text : g_textDim,
         };
         [kPaletteLabels[i] drawAtPoint:NSMakePoint(cardX + 48, itemY + 10) withAttributes:labelAttrs];
+
+        // Arrow indicator for submenu items
+        if (i == kPaletteItemCount - 1) {
+            NSDictionary* arrowAttrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightRegular],
+                NSForegroundColorAttributeName: sel ? g_text : g_textMuted,
+            };
+            [@"\u203A" drawAtPoint:NSMakePoint(cardX + cardW - 28, itemY + 10) withAttributes:arrowAttrs];
+        }
+
+        itemY += rowH;
+    }
+}
+
+- (void)drawThemePicker {
+    CGFloat w = self.bounds.size.width;
+    CGFloat h = self.bounds.size.height;
+
+    CGFloat cardW = 340;
+    CGFloat rowH = 34;
+    CGFloat headerH = 44;
+    int visibleItems = 12;
+    CGFloat cardH = headerH + rowH * visibleItems + 8;
+    CGFloat cardX = (w - cardW) / 2;
+    CGFloat cardY = h * 0.15;
+
+    NSBezierPath* cardPath = [NSBezierPath bezierPathWithRoundedRect:
+        NSMakeRect(cardX, cardY, cardW, cardH) xRadius:12 yRadius:12];
+    [hexColor(0x141414) setFill];
+    [cardPath fill];
+
+    [hexColor(0x2A2A2A) setStroke];
+    cardPath.lineWidth = 1;
+    [cardPath stroke];
+
+    // Header with back arrow
+    NSDictionary* backAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightRegular],
+        NSForegroundColorAttributeName: g_textMuted,
+    };
+    [@"\u2039 Back" drawAtPoint:NSMakePoint(cardX + 16, cardY + 14) withAttributes:backAttrs];
+
+    NSDictionary* titleAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: g_text,
+    };
+    NSString* title = @"Theme";
+    CGSize titleSz = [title sizeWithAttributes:titleAttrs];
+    [title drawAtPoint:NSMakePoint(cardX + (cardW - titleSz.width) / 2, cardY + 14) withAttributes:titleAttrs];
+
+    [hexColor(0x2A2A2A) setFill];
+    NSRectFill(NSMakeRect(cardX, cardY + headerH, cardW, 1));
+
+    // Theme list
+    CGFloat itemY = cardY + headerH + 4;
+    for (int i = 0; i < visibleItems && (i + self.themeScroll) < kThemeCount; i++) {
+        int themeIdx = (int)(i + self.themeScroll);
+        BOOL sel = (self.paletteSelection == themeIdx);
+        BOOL current = (themeIdx == g_currentTheme);
+
+        if (sel) {
+            NSBezierPath* rowBg = [NSBezierPath bezierPathWithRoundedRect:
+                NSMakeRect(cardX + 6, itemY, cardW - 12, rowH) xRadius:6 yRadius:6];
+            [hexColor(0x1E1E1E) setFill];
+            [rowBg fill];
+        }
+
+        // Color preview swatch
+        const ThemeDef* td = &kThemes[themeIdx];
+        CGFloat swatchY = itemY + (rowH - 14) / 2;
+        NSBezierPath* swatch = [NSBezierPath bezierPathWithRoundedRect:
+            NSMakeRect(cardX + 18, swatchY, 14, 14) xRadius:3 yRadius:3];
+        [hexColor(td->bg) setFill];
+        [swatch fill];
+        [hexColor(td->border) setStroke];
+        swatch.lineWidth = 1;
+        [swatch stroke];
+
+        // Accent dot inside swatch
+        NSBezierPath* accentDot = [NSBezierPath bezierPathWithOvalInRect:
+            NSMakeRect(cardX + 22, swatchY + 4, 6, 6)];
+        [hexColor(td->accent) setFill];
+        [accentDot fill];
+
+        // Theme name
+        NSString* name = [NSString stringWithUTF8String:td->name];
+        NSDictionary* labelAttrs = @{
+            NSFontAttributeName: [NSFont systemFontOfSize:13 weight:sel ? NSFontWeightMedium : NSFontWeightRegular],
+            NSForegroundColorAttributeName: sel ? g_text : g_textDim,
+        };
+        [name drawAtPoint:NSMakePoint(cardX + 42, itemY + 8) withAttributes:labelAttrs];
+
+        // Checkmark for current theme
+        if (current) {
+            NSDictionary* checkAttrs = @{
+                NSFontAttributeName: [NSFont systemFontOfSize:13 weight:NSFontWeightMedium],
+                NSForegroundColorAttributeName: g_green,
+            };
+            [@"\u2713" drawAtPoint:NSMakePoint(cardX + cardW - 30, itemY + 8) withAttributes:checkAttrs];
+        }
 
         itemY += rowH;
     }
@@ -579,6 +740,49 @@ static NSString* const kPaletteHints[] = {
     if (self.paletteVisible) {
         CGFloat w = self.bounds.size.width;
         CGFloat h = self.bounds.size.height;
+
+        if (self.paletteMode == 1) {
+            // Theme picker mode
+            CGFloat cardW = 340;
+            CGFloat rowH = 34;
+            CGFloat headerH = 44;
+            int visibleItems = 12;
+            CGFloat cardH = headerH + rowH * visibleItems + 8;
+            CGFloat cardX = (w - cardW) / 2;
+            CGFloat cardY = h * 0.15;
+
+            // Click on "Back" header area
+            if (p.x >= cardX && p.x <= cardX + cardW &&
+                p.y >= cardY && p.y < cardY + headerH) {
+                self.paletteMode = 0;
+                self.paletteSelection = kPaletteItemCount - 1;
+                [self setNeedsDisplay:YES];
+                return;
+            }
+
+            // Click on a theme item
+            CGFloat itemsTop = cardY + headerH + 4;
+            if (p.x >= cardX && p.x <= cardX + cardW &&
+                p.y >= itemsTop && p.y <= cardY + cardH) {
+                int idx = (int)((p.y - itemsTop) / rowH);
+                int themeIdx = (int)(idx + self.themeScroll);
+                if (themeIdx >= 0 && themeIdx < kThemeCount) {
+                    applyTheme(themeIdx);
+                    self.paletteVisible = NO;
+                    self.paletteMode = 0;
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+            }
+
+            // Click outside dismisses
+            self.paletteVisible = NO;
+            self.paletteMode = 0;
+            [self setNeedsDisplay:YES];
+            return;
+        }
+
+        // Commands mode
         CGFloat cardW = 320;
         CGFloat rowH = 38;
         CGFloat headerH = 44;
@@ -590,14 +794,25 @@ static NSString* const kPaletteHints[] = {
             p.y >= cardY + headerH && p.y <= cardY + cardH) {
             int idx = (int)((p.y - cardY - headerH - 4) / rowH);
             if (idx >= 0 && idx < kPaletteItemCount) {
-                bridge_tmux_command((uint8_t)idx);
-                self.paletteVisible = NO;
+                if (idx == kPaletteItemCount - 1) {
+                    // "Theme..." — switch to theme picker
+                    self.paletteMode = 1;
+                    self.paletteSelection = g_currentTheme;
+                    self.themeScroll = 0;
+                    if (self.paletteSelection >= 12) {
+                        self.themeScroll = self.paletteSelection - 6;
+                    }
+                } else {
+                    bridge_tmux_command((uint8_t)idx);
+                    self.paletteVisible = NO;
+                }
                 [self setNeedsDisplay:YES];
                 return;
             }
         }
         // Click outside dismisses
         self.paletteVisible = NO;
+        self.paletteMode = 0;
         [self setNeedsDisplay:YES];
         return;
     }
@@ -771,18 +986,39 @@ static NSString* const kPaletteHints[] = {
     if (self.paletteVisible) {
         CGFloat w = self.bounds.size.width;
         CGFloat h = self.bounds.size.height;
-        CGFloat cardW = 320;
-        CGFloat rowH = 38;
-        CGFloat headerH = 44;
-        CGFloat cardX = (w - cardW) / 2;
-        CGFloat cardY = h * 0.2;
-        CGFloat itemsTop = cardY + headerH + 4;
 
-        if (p.x >= cardX && p.x <= cardX + cardW && p.y >= itemsTop) {
-            int idx = (int)((p.y - itemsTop) / rowH);
-            if (idx >= 0 && idx < kPaletteItemCount && idx != self.paletteSelection) {
-                self.paletteSelection = idx;
-                [self setNeedsDisplay:YES];
+        if (self.paletteMode == 1) {
+            // Theme picker hover
+            CGFloat cardW = 340;
+            CGFloat rowH = 34;
+            CGFloat headerH = 44;
+            CGFloat cardX = (w - cardW) / 2;
+            CGFloat cardY = h * 0.15;
+            CGFloat itemsTop = cardY + headerH + 4;
+
+            if (p.x >= cardX && p.x <= cardX + cardW && p.y >= itemsTop) {
+                int idx = (int)((p.y - itemsTop) / rowH);
+                int themeIdx = (int)(idx + self.themeScroll);
+                if (themeIdx >= 0 && themeIdx < kThemeCount && themeIdx != self.paletteSelection) {
+                    self.paletteSelection = themeIdx;
+                    [self setNeedsDisplay:YES];
+                }
+            }
+        } else {
+            // Commands hover
+            CGFloat cardW = 320;
+            CGFloat rowH = 38;
+            CGFloat headerH = 44;
+            CGFloat cardX = (w - cardW) / 2;
+            CGFloat cardY = h * 0.2;
+            CGFloat itemsTop = cardY + headerH + 4;
+
+            if (p.x >= cardX && p.x <= cardX + cardW && p.y >= itemsTop) {
+                int idx = (int)((p.y - itemsTop) / rowH);
+                if (idx >= 0 && idx < kPaletteItemCount && idx != self.paletteSelection) {
+                    self.paletteSelection = idx;
+                    [self setNeedsDisplay:YES];
+                }
             }
         }
         [[NSCursor pointingHandCursor] set];
@@ -818,7 +1054,26 @@ static NSString* const kPaletteHints[] = {
 }
 
 - (void)scrollWheel:(NSEvent*)event {
-    if (self.paletteVisible) return;
+    if (self.paletteVisible) {
+        if (self.paletteMode == 1) {
+            // Scroll theme list
+            CGFloat dy = event.scrollingDeltaY;
+            if (event.hasPreciseScrollingDeltas) dy /= 10.0;
+            int lines = (int)dy;
+            if (lines == 0 && dy != 0) lines = (dy > 0) ? 1 : -1;
+            if (lines == 0) return;
+            NSInteger newScroll = self.themeScroll - lines;
+            NSInteger maxScroll = kThemeCount - 12;
+            if (maxScroll < 0) maxScroll = 0;
+            if (newScroll < 0) newScroll = 0;
+            if (newScroll > maxScroll) newScroll = maxScroll;
+            if (newScroll != self.themeScroll) {
+                self.themeScroll = newScroll;
+                [self setNeedsDisplay:YES];
+            }
+        }
+        return;
+    }
     CGFloat dy = event.scrollingDeltaY;
     if (event.hasPreciseScrollingDeltas) dy /= 3.0; // trackpad
     int lines = (int)dy;
@@ -899,26 +1154,86 @@ static NSString* const kPaletteHints[] = {
 - (void)keyDown:(NSEvent*)event {
     // Command palette navigation
     if (self.paletteVisible) {
-        switch (event.keyCode) {
-            case 126: // Up
-                self.paletteSelection = (self.paletteSelection - 1 + kPaletteItemCount) % kPaletteItemCount;
-                [self setNeedsDisplay:YES];
-                return;
-            case 125: // Down
-                self.paletteSelection = (self.paletteSelection + 1) % kPaletteItemCount;
-                [self setNeedsDisplay:YES];
-                return;
-            case 36: // Enter
-                bridge_tmux_command((uint8_t)self.paletteSelection);
-                self.paletteVisible = NO;
-                [self setNeedsDisplay:YES];
-                return;
-            case 53: // Escape
-                self.paletteVisible = NO;
-                [self setNeedsDisplay:YES];
-                return;
-            default:
-                return; // swallow all other keys while palette is open
+        if (self.paletteMode == 1) {
+            // Theme picker mode
+            switch (event.keyCode) {
+                case 126: { // Up
+                    NSInteger sel = self.paletteSelection;
+                    if (sel > 0) {
+                        self.paletteSelection = sel - 1;
+                        // Scroll up if needed
+                        if (self.paletteSelection < self.themeScroll) {
+                            self.themeScroll = self.paletteSelection;
+                        }
+                    }
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+                case 125: { // Down
+                    NSInteger sel = self.paletteSelection;
+                    if (sel < kThemeCount - 1) {
+                        self.paletteSelection = sel + 1;
+                        // Scroll down if needed (12 visible items)
+                        if (self.paletteSelection >= self.themeScroll + 12) {
+                            self.themeScroll = self.paletteSelection - 11;
+                        }
+                    }
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+                case 36: { // Enter — apply theme
+                    applyTheme((int)self.paletteSelection);
+                    self.paletteVisible = NO;
+                    self.paletteMode = 0;
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+                case 53: // Escape — back to commands
+                case 51: { // Delete/Backspace — back to commands
+                    self.paletteMode = 0;
+                    self.paletteSelection = kPaletteItemCount - 1; // highlight "Theme..."
+                    [self setNeedsDisplay:YES];
+                    return;
+                }
+                default:
+                    return;
+            }
+        } else {
+            // Commands mode
+            switch (event.keyCode) {
+                case 126: // Up
+                    self.paletteSelection = (self.paletteSelection - 1 + kPaletteItemCount) % kPaletteItemCount;
+                    [self setNeedsDisplay:YES];
+                    return;
+                case 125: // Down
+                    self.paletteSelection = (self.paletteSelection + 1) % kPaletteItemCount;
+                    [self setNeedsDisplay:YES];
+                    return;
+                case 36: // Enter
+                    if (self.paletteSelection == kPaletteItemCount - 1) {
+                        // "Theme..." — switch to theme picker mode
+                        self.paletteMode = 1;
+                        self.paletteSelection = g_currentTheme;
+                        self.themeScroll = 0;
+                        // Ensure current theme is visible
+                        if (self.paletteSelection >= 12) {
+                            self.themeScroll = self.paletteSelection - 6;
+                        }
+                        [self setNeedsDisplay:YES];
+                    } else {
+                        bridge_tmux_command((uint8_t)self.paletteSelection);
+                        self.paletteVisible = NO;
+                        [self setNeedsDisplay:YES];
+                    }
+                    return;
+                case 53: // Escape
+                    self.paletteVisible = NO;
+                    self.paletteMode = 0;
+                    [self setNeedsDisplay:YES];
+                    return;
+                default:
+                    return; // swallow all other keys while palette is open
+            }
         }
     }
 
@@ -928,6 +1243,8 @@ static NSString* const kPaletteHints[] = {
         if ([chars isEqualToString:@"k"]) {
             self.paletteVisible = !self.paletteVisible;
             self.paletteSelection = 0;
+            self.paletteMode = 0;
+            self.themeScroll = 0;
             [self setNeedsDisplay:YES];
             return;
         }
@@ -1020,7 +1337,7 @@ static NSString* const kPaletteHints[] = {
     self.window.title = @"MultiplexTerm";
     self.window.titlebarAppearsTransparent = YES;
     self.window.titleVisibility = NSWindowTitleHidden;
-    self.window.backgroundColor = hexColor(0x0A0A0A);
+    self.window.backgroundColor = g_bg;
     self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
     self.window.minSize = NSMakeSize(600, 400);
 

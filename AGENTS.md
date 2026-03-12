@@ -6,6 +6,13 @@ MultiplexTerm (CLI: `mterm`) is a native macOS GUI terminal that wraps tmux. It 
 
 **Stack**: Zig 0.15 + Objective-C/Cocoa (AppKit) + tmux
 
+## Agent Rules
+
+1. **Always update this file** when adding new functionality — document new files, data flows, conventions, and pitfalls.
+2. **Always add unit tests** for every change. Run `zig build test` to verify before committing.
+3. **Update README.md** when adding user-facing features (new shortcuts, UI changes, etc.).
+4. **Run `zig build`** to verify compilation before committing.
+
 ## Setup & Build
 
 ```bash
@@ -188,8 +195,14 @@ sequenceDiagram
 - `isShell()` recognizes: zsh, bash, fish, sh, dash, tcsh, ksh, tmux, login
 - `prettyName()` maps: nvim→"NVim", claude→"Claude Code", python3→"Python", node→"Node.js", etc.
 
-### Theme
-- Vercel dark: bg=#0A0A0A, sidebar=#111111, border=#2A2A2A, text=#EDEDED
+### Theme System
+- 25 built-in themes selectable via Cmd+K → Theme... submenu
+- Themes: Vercel Dark (default), Gruvbox Dark/Light, Catppuccin Mocha/Latte, Kanagawa/Light, Nord, Dracula, One Dark/Light, Solarized Dark/Light, Tokyo Night/Light, Rosé Pine/Dawn, Everforest Dark/Light, Monokai Pro, Ayu Dark/Light, Nightfox, Synthwave '84, GitHub Dark
+- `ThemeDef` struct: name, bg, fg, sidebar, border, accent, green (all `uint32_t` hex)
+- `applyTheme(idx)` computes derived colors (textDim, textMuted, selectedBg, hoverBg) via `blendHex()`
+- `g_currentTheme` tracks active theme index; checkmark shown in picker
+- Theme picker supports keyboard (up/down/enter/esc), mouse click, hover, and scroll wheel
+- `paletteMode`: 0=commands, 1=themes — controls which view `drawPalette` renders
 - Fonts: SF Mono (terminal), SF Pro (UI), Menlo (italic/bold-italic)
 
 ## Testing
@@ -207,6 +220,8 @@ zig build test
 # - Option+F → forward word (not crash)
 # - Double-click terminal → selects line
 # - Cmd+C/V → copy/paste works
+# - Cmd+K → Theme... → theme picker opens, can select theme with click or keyboard
+# - Scroll, hover, and back button work in theme picker
 
 # Logs
 cat /tmp/mterm.log

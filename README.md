@@ -4,10 +4,10 @@ A native macOS terminal multiplexer GUI built with Zig and Cocoa. Wraps tmux wit
 
 ## Features
 
-- Native macOS GUI with Vercel-style dark theme
+- Native macOS GUI with 25 built-in themes (Vercel Dark, Gruvbox, Catppuccin, Nord, Dracula, and more)
 - Tmux session management (create, rename, delete, switch)
 - Smart session names (auto-detects running apps like NVim, Claude Code, etc.)
-- Command palette (Cmd+K) for splits, windows, and pane control
+- Command palette (Cmd+K) for splits, windows, pane control, and theme selection
 - VT100/ANSI terminal emulation with 256-color and RGB support
 - Text selection, copy/paste (Cmd+C/V)
 - Mouse support (pane selection, scroll)
@@ -132,7 +132,7 @@ brew install tmux
 
 | Shortcut | Action |
 |----------|--------|
-| Cmd+K | Command palette (split panes, new window, zoom, etc.) |
+| Cmd+K | Command palette (split panes, new window, zoom, themes, etc.) |
 | Cmd+C | Copy selection |
 | Cmd+V | Paste |
 | Cmd+Q | Quit |
