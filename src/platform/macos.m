@@ -441,7 +441,7 @@ static NSString* const kPaletteHints[] = {
     CGFloat h = self.bounds.size.height;
 
     // Dim overlay
-    [[NSColor colorWithWhite:0 alpha:0.5] setFill];
+    [[NSColor colorWithWhite:0 alpha:0.4] setFill];
     NSRectFill(self.bounds);
 
     if (self.paletteMode == 1) {
@@ -459,10 +459,10 @@ static NSString* const kPaletteHints[] = {
 
     NSBezierPath* cardPath = [NSBezierPath bezierPathWithRoundedRect:
         NSMakeRect(cardX, cardY, cardW, cardH) xRadius:12 yRadius:12];
-    [hexColor(0x141414) setFill];
+    [g_sidebarBg setFill];
     [cardPath fill];
 
-    [hexColor(0x2A2A2A) setStroke];
+    [g_border setStroke];
     cardPath.lineWidth = 1;
     [cardPath stroke];
 
@@ -472,7 +472,7 @@ static NSString* const kPaletteHints[] = {
     };
     [@"Commands" drawAtPoint:NSMakePoint(cardX + 20, cardY + 14) withAttributes:titleAttrs];
 
-    [hexColor(0x2A2A2A) setFill];
+    [g_border setFill];
     NSRectFill(NSMakeRect(cardX, cardY + headerH, cardW, 1));
 
     CGFloat itemY = cardY + headerH + 4;
@@ -482,7 +482,7 @@ static NSString* const kPaletteHints[] = {
         if (sel) {
             NSBezierPath* rowBg = [NSBezierPath bezierPathWithRoundedRect:
                 NSMakeRect(cardX + 6, itemY, cardW - 12, rowH) xRadius:6 yRadius:6];
-            [hexColor(0x1E1E1E) setFill];
+            [g_selectedBg setFill];
             [rowBg fill];
         }
 
@@ -525,10 +525,10 @@ static NSString* const kPaletteHints[] = {
 
     NSBezierPath* cardPath = [NSBezierPath bezierPathWithRoundedRect:
         NSMakeRect(cardX, cardY, cardW, cardH) xRadius:12 yRadius:12];
-    [hexColor(0x141414) setFill];
+    [g_sidebarBg setFill];
     [cardPath fill];
 
-    [hexColor(0x2A2A2A) setStroke];
+    [g_border setStroke];
     cardPath.lineWidth = 1;
     [cardPath stroke];
 
@@ -547,7 +547,7 @@ static NSString* const kPaletteHints[] = {
     CGSize titleSz = [title sizeWithAttributes:titleAttrs];
     [title drawAtPoint:NSMakePoint(cardX + (cardW - titleSz.width) / 2, cardY + 14) withAttributes:titleAttrs];
 
-    [hexColor(0x2A2A2A) setFill];
+    [g_border setFill];
     NSRectFill(NSMakeRect(cardX, cardY + headerH, cardW, 1));
 
     // Theme list
@@ -555,12 +555,12 @@ static NSString* const kPaletteHints[] = {
     for (int i = 0; i < visibleItems && (i + self.themeScroll) < kThemeCount; i++) {
         int themeIdx = (int)(i + self.themeScroll);
         BOOL sel = (self.paletteSelection == themeIdx);
-        BOOL current = (themeIdx == g_currentTheme);
+        BOOL current = (themeIdx == g_savedTheme);
 
         if (sel) {
             NSBezierPath* rowBg = [NSBezierPath bezierPathWithRoundedRect:
                 NSMakeRect(cardX + 6, itemY, cardW - 12, rowH) xRadius:6 yRadius:6];
-            [hexColor(0x1E1E1E) setFill];
+            [g_selectedBg setFill];
             [rowBg fill];
         }
 
@@ -1247,6 +1247,10 @@ static NSString* const kPaletteHints[] = {
         NSString* chars = event.charactersIgnoringModifiers;
         // Cmd+K — toggle command palette
         if ([chars isEqualToString:@"k"]) {
+            if (self.paletteVisible && self.paletteMode == 1) {
+                // Closing while in theme preview — revert
+                applyTheme(g_savedTheme);
+            }
             self.paletteVisible = !self.paletteVisible;
             self.paletteSelection = 0;
             self.paletteMode = 0;
