@@ -270,6 +270,12 @@ fn updateDisplayNames() void {
 }
 
 fn computeDisplayName(session: *const state_mod.Session) []const u8 {
+    // If the user manually renamed the session, always show that name.
+    // Auto-generated names match: cwd dirname, dirname-N, session-N, or bare digits.
+    if (!isAutoName(session.name)) {
+        return session.name;
+    }
+
     const cmd = session.active_command;
     const path = session.active_path;
 
@@ -287,6 +293,48 @@ fn computeDisplayName(session: *const state_mod.Session) []const u8 {
 
     // Fallback to session name
     return session.name;
+}
+
+/// Returns true if the session name looks auto-generated (not user-renamed).
+/// Auto names: bare digits ("0", "1"), "session-N", or "<cwd>", "<cwd>-N".
+fn isAutoName(name: []const u8) bool {
+    if (name.len == 0) return true;
+
+    // Bare digits (tmux default: "0", "1", ...)
+    if (allDigits(name)) return true;
+
+    // "session-N"
+    if (std.mem.startsWith(u8, name, "session-")) {
+        if (allDigits(name["session-".len..])) return true;
+    }
+
+    // Match against cwd dirname
+    var cwd_buf: [1024]u8 = undefined;
+    const cwd = std.posix.getcwd(&cwd_buf) catch return false;
+    const dir = std.fs.path.basename(cwd);
+    if (dir.len == 0) return false;
+
+    // Exact match: "dirname"
+    if (std.mem.eql(u8, name, dir)) return true;
+
+    // "dirname-N"
+    if (name.len > dir.len + 1 and
+        std.mem.startsWith(u8, name, dir) and
+        name[dir.len] == '-' and
+        allDigits(name[dir.len + 1 ..]))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+fn allDigits(s: []const u8) bool {
+    if (s.len == 0) return false;
+    for (s) |c| {
+        if (c < '0' or c > '9') return false;
+    }
+    return true;
 }
 
 fn isShell(cmd: []const u8) bool {

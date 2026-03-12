@@ -191,7 +191,8 @@ sequenceDiagram
 
 ### Display Names
 - `computeDisplayName()` in bridge.zig determines sidebar label per session
-- Priority: notable app name (via `prettyName()`) → raw command → directory basename → session name
+- Priority: **user-renamed session name** (if not auto-generated) → notable app name (via `prettyName()`) → raw command → directory basename → session name
+- `isAutoName()` detects auto-generated names: bare digits, `session-N`, `<cwd>-N` — anything else is treated as user-renamed
 - `isShell()` recognizes: zsh, bash, fish, sh, dash, tcsh, ksh, tmux, login
 - Sessions are sorted by `session_created` timestamp (newest first, newest at top)
 - `prettyName()` maps: nvim→"NVim", claude→"Claude Code", python3→"Python", node→"Node.js", etc.
