@@ -442,15 +442,21 @@ static NSString* const kPaletteHints[] = {
     [btnText drawAtPoint:NSMakePoint(btnTextX, btnTextY) withAttributes:btnAttrs];
     y = btnY + kNewBtnHeight;
 
-    // Recent Projects section
+    // Recent Projects section (always shown)
     uint16_t rpCount = bridge_get_recent_project_count();
-    if (rpCount > 0) {
-        // Header
-        [g_border setFill];
-        NSRectFill(NSMakeRect(0, y, sw, 1));
-        [@"RECENT PROJECTS" drawAtPoint:NSMakePoint(kSidebarPadH, y + 8) withAttributes:headerAttrs];
-        y += kRecentHeaderH;
+    [g_border setFill];
+    NSRectFill(NSMakeRect(0, y, sw, 1));
+    [@"RECENT PROJECTS" drawAtPoint:NSMakePoint(kSidebarPadH, y + 8) withAttributes:headerAttrs];
+    y += kRecentHeaderH;
 
+    if (rpCount == 0) {
+        NSDictionary* emptyAttrs = @{
+            NSFontAttributeName: self.uiFont,
+            NSForegroundColorAttributeName: g_textMuted,
+        };
+        [@"Nothing yet" drawAtPoint:NSMakePoint(kSidebarPadH + 14, y + (kRecentRowH - 14) / 2) withAttributes:emptyAttrs];
+        y += kRecentRowH;
+    } else {
         for (uint16_t i = 0; i < rpCount; i++) {
             if (y + kRecentRowH > h) break;
 
@@ -679,8 +685,9 @@ static NSString* const kPaletteHints[] = {
     CGFloat centerX = areaX + areaW / 2;
 
     uint16_t rpCount = bridge_get_recent_project_count();
-    // Shift button up to make room for recent projects list
-    CGFloat totalH = 40 + (rpCount > 0 ? 30 + rpCount * 32 : 0);
+    // Always reserve space for header + at least one row below button
+    CGFloat rpRows = rpCount > 0 ? rpCount : 1;
+    CGFloat totalH = 40 + 30 + 24 + rpRows * 32;
     CGFloat startY = (h - totalH) / 2;
 
     // Button dimensions
@@ -706,23 +713,31 @@ static NSString* const kPaletteHints[] = {
     CGFloat textY = btnY + (btnH - textSize.height) / 2;
     [label drawAtPoint:NSMakePoint(textX, textY) withAttributes:attrs];
 
-    // Recent projects below the button
-    if (rpCount > 0) {
-        CGFloat rpY = btnY + btnH + 30;
+    // Recent projects below the button (always shown)
+    CGFloat rpY = btnY + btnH + 30;
 
-        NSDictionary* headerAttrs = @{
-            NSFontAttributeName: self.uiFontSmall,
+    NSDictionary* headerAttrs = @{
+        NSFontAttributeName: self.uiFontSmall,
+        NSForegroundColorAttributeName: g_textMuted,
+        NSKernAttributeName: @1.5,
+    };
+    NSString* headerLabel = @"RECENT PROJECTS";
+    NSSize headerSize = [headerLabel sizeWithAttributes:headerAttrs];
+    [headerLabel drawAtPoint:NSMakePoint(centerX - headerSize.width / 2, rpY) withAttributes:headerAttrs];
+    rpY += 24;
+
+    CGFloat rpRowW = 240;
+    CGFloat rpRowH = 32;
+
+    if (rpCount == 0) {
+        NSDictionary* emptyAttrs = @{
+            NSFontAttributeName: self.uiFont,
             NSForegroundColorAttributeName: g_textMuted,
-            NSKernAttributeName: @1.5,
         };
-        NSString* headerLabel = @"RECENT PROJECTS";
-        NSSize headerSize = [headerLabel sizeWithAttributes:headerAttrs];
-        [headerLabel drawAtPoint:NSMakePoint(centerX - headerSize.width / 2, rpY) withAttributes:headerAttrs];
-        rpY += 24;
-
-        CGFloat rpRowW = 240;
-        CGFloat rpRowH = 32;
-
+        NSString* emptyLabel = @"Nothing yet";
+        NSSize emptySize = [emptyLabel sizeWithAttributes:emptyAttrs];
+        [emptyLabel drawAtPoint:NSMakePoint(centerX - emptySize.width / 2, rpY + (rpRowH - emptySize.height) / 2) withAttributes:emptyAttrs];
+    } else {
         for (uint16_t i = 0; i < rpCount; i++) {
             CGFloat rowX = centerX - rpRowW / 2;
             CGFloat rowY = rpY;

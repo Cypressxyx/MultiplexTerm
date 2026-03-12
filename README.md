@@ -7,6 +7,7 @@ A native macOS terminal multiplexer GUI built with Zig and Cocoa. Wraps tmux wit
 - Native macOS GUI with 25 built-in themes (Vercel Dark, Gruvbox, Catppuccin, Nord, Dracula, and more)
 - Tmux session management (create, rename, delete, switch)
 - Smart session names (auto-detects running apps like NVim, Claude Code, etc.)
+- Recent Projects sidebar with quick-launch into frequently visited directories
 - Command palette (Cmd+K) for splits, windows, pane control, and theme selection
 - VT100/ANSI terminal emulation with 256-color and RGB support
 - Text selection, copy/paste (Cmd+C/V)
@@ -101,33 +102,33 @@ sequenceDiagram
     Bridge->>PTY: new PTY + attach
 ```
 
-## Requirements
+## Install
 
-- macOS
-- [Zig](https://ziglang.org/download/) 0.15+
-- [tmux](https://github.com/tmux/tmux) 3.0+
-
-## Build & Run
+### Homebrew (recommended)
 
 ```bash
-# Clone the repo
+brew tap Cypressxyx/multiplexterm
+brew install --cask multiplexterm
+```
+
+### Build from source
+
+Requirements: macOS, [Zig](https://ziglang.org/download/) 0.15+, [tmux](https://github.com/tmux/tmux) 3.0+
+
+```bash
 git clone https://github.com/Cypressxyx/MultiplexTerm.git
 cd MultiplexTerm
 
-# Build
+# Build and run
 zig build
-
-# Run
 ./zig-out/bin/mterm
 
-# Install as macOS app (adds mTerm.app to /Applications)
+# Or install as macOS app (adds mTerm.app to /Applications)
 zig build install-app
 ```
 
-## Install tmux (if needed)
-
+tmux is required:
 ```bash
-# Homebrew
 brew install tmux
 ```
 
@@ -170,3 +171,4 @@ brew install tmux
 - Double-click a session to rename
 - Click **×** once to arm (turns red), click again to delete
 - Right-click a session for context menu
+- **Recent Projects** section shows frequently visited directories — click to open a new session there, **×** to remove

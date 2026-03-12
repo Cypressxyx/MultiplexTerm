@@ -197,9 +197,9 @@ sequenceDiagram
 ### Display Names
 - `computeDisplayName()` in bridge.zig determines sidebar label per session
 - Priority: **user-renamed session name** (if not auto-generated) → notable app name (via `prettyName()`) → raw command → directory basename → session name
-- `isAutoName()` detects auto-generated names: bare digits, `session-N`, `<cwd>-N` — anything else is treated as user-renamed
+- `isAutoNameWithPath()` detects auto-generated names: bare digits, `session-N`, `mterm`, `<cwd>-N`, `<session_path>-N`, `<HOME>-N` — anything else is treated as user-renamed
 - `isShell()` recognizes: zsh, bash, fish, sh, dash, tcsh, ksh, tmux, login
-- `isVersionString()` detects version-like commands (e.g. "2.1.74") that some tools set as process title — these are skipped
+- `isVersionString()` detects version-like commands (e.g. "2.1.74") that some tools set as process title — maps to "Claude Code"
 - Sessions are sorted by `session_created` timestamp (newest first, newest at top)
 - `prettyName()` maps: nvim→"NVim", claude→"Claude Code", python3→"Python", node→"Node.js", etc.
 
@@ -207,9 +207,12 @@ sequenceDiagram
 - Sidebar shows a "RECENT PROJECTS" section below the "+ New Session" button
 - Tracks directories from active tmux sessions via `pane_current_path`
 - Persisted to `~/.mterm/recent_projects` (one path per line, max 10 entries)
-- Clicking a recent project creates a new tmux session in that directory
+- Clicking a recent project creates a new tmux session in that directory and switches to it
+- × button on hover removes a project from the list
+- Section always visible with "Nothing yet" placeholder when empty
+- Also shown in empty state (no sessions) below the "Start New Session" button
 - Backend: `loadRecentProjects()`, `saveRecentProjects()`, `addRecentProject()` in bridge.zig
-- FFI: `bridge_get_recent_project_count/display/path()`, `bridge_create_session_in_dir()`
+- FFI: `bridge_get_recent_project_count/display/path()`, `bridge_create_session_in_dir()`, `bridge_remove_recent_project()`
 - Manager: `createSessionInDir()` in tmux/manager.zig uses `tmux new-session -d -s <name> -c <dir>`
 
 ### Theme System
