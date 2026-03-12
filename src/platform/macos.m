@@ -1405,6 +1405,18 @@ static NSString* const kPaletteHints[] = {
 
 - (void)applicationDidFinishLaunching:(NSNotification*)notification {
     (void)notification;
+
+    // Ensure PATH includes Homebrew locations — Finder/Launchpad/Raycast launch
+    // with a minimal PATH that doesn't include /opt/homebrew/bin or /usr/local/bin
+    const char* path = getenv("PATH");
+    if (path) {
+        char newpath[4096];
+        snprintf(newpath, sizeof(newpath), "%s:/opt/homebrew/bin:/usr/local/bin", path);
+        setenv("PATH", newpath, 1);
+    } else {
+        setenv("PATH", "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin", 1);
+    }
+
     NSRect frame = NSMakeRect(100, 100, 1280, 820);
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                        NSWindowStyleMaskResizable | NSWindowStyleMaskMiniaturizable |
