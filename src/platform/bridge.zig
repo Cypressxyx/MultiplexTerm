@@ -993,10 +993,11 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
     if (host_idx >= g_ssh_host_count) return;
     const host = &g_ssh_hosts[host_idx];
     const host_name = host.host.name[0..host.host.name_len];
-    const tmux = &(g_tmux orelse return);
+    _ = &(g_tmux orelse return);
     const state = &(g_state orelse return);
 
-    // Create a local tmux session that just opens an SSH shell
+    // Create a new tmux session on the remote host, then attach to it locally.
+    // ssh HOST -t 'tmux new-session' creates + attaches in one command.
     var name_buf: [128]u8 = undefined;
     const count = state.sessions.items.len;
     const local_name = std.fmt.bufPrint(&name_buf, "ssh_{s}-{d}", .{ host_name, count }) catch return;
@@ -1005,10 +1006,10 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
         startPty(g_initial_cols, g_initial_rows);
     }
 
-    // tmux new-session -d -s NAME -- ssh HOST
+    // Local tmux session runs: ssh HOST -t 'tmux new-session'
     const result = std.process.Child.run(.{
         .allocator = g_allocator,
-        .argv = &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name },
+        .argv = &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name, "-t", "tmux new-session" },
     }) catch return;
     g_allocator.free(result.stdout);
     g_allocator.free(result.stderr);
@@ -1016,9 +1017,15 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
     syncState();
     selectSessionByName(local_name);
 
-    // After connecting, try to refresh remote sessions
-    if (host.status != .connected) {
-        _ = tmux; // suppress unused
+    // Refresh remote sessions list so the new one shows up
+    if (host.status == .connected) {
+        host.status = .connecting;
+        g_ssh_probe_host = host_idx;
+        g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch {
+            host.status = .connected; // keep old state on probe failure
+            return;
+        };
+    } else if (host.status != .connecting) {
         host.status = .connecting;
         g_ssh_probe_host = host_idx;
         g_ssh_probe_thread = std.Thread.spawn(.{}, sshProbeThreadFn, .{}) catch {
