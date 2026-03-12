@@ -119,6 +119,9 @@ zig build
 
 # Run
 ./zig-out/bin/mterm
+
+# Install as macOS app (adds mTerm.app to /Applications)
+zig build install-app
 ```
 
 ## Install tmux (if needed)
