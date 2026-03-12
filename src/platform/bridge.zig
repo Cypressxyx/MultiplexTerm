@@ -30,6 +30,9 @@ var g_running: bool = true;
 var g_sync_ctr: u32 = 0;
 
 var g_started: bool = false;
+var g_checked: bool = false; // whether we've checked for existing sessions on startup
+var g_initial_cols: u16 = 80;
+var g_initial_rows: u16 = 24;
 var g_log_file: ?std.fs.File = null;
 
 fn logInit() void {
@@ -69,6 +72,7 @@ export fn bridge_init() callconv(.c) u8 {
 var g_session_name_buf: [64:0]u8 = undefined;
 
 fn startPty(cols: u16, rows: u16) void {
+    if (g_engine) |*old| old.deinit();
     g_engine = TerminalEngine.init(g_allocator, cols, rows) catch return;
 
     // Use current directory name as initial session name
@@ -111,6 +115,52 @@ fn startPty(cols: u16, rows: u16) void {
         t.clearEnvVar("CLAUDECODE");
     }
     updateRenderCells();
+}
+
+fn startPtyAttach(cols: u16, rows: u16) void {
+    if (g_engine) |*old| old.deinit();
+    g_engine = TerminalEngine.init(g_allocator, cols, rows) catch return;
+
+    var pty = Pty.open() catch return;
+    pty.setSize(cols, rows);
+    const session_name: [*:0]const u8 = &g_session_name_buf;
+    const argv = [_:null]?[*:0]const u8{ "tmux", "attach-session", "-t", session_name };
+    pty.spawn(&argv) catch {
+        pty.close();
+        return;
+    };
+    pty.setNonBlocking() catch {};
+    g_pty = pty;
+    g_started = true;
+
+    syncState();
+
+    // Select the attached session
+    if (g_state) |*state| {
+        const target = g_session_name_buf[0..@as(usize, @intCast(std.mem.indexOfScalar(u8, &g_session_name_buf, 0) orelse 0))];
+        for (state.sessions.items, 0..) |s, i| {
+            if (std.mem.eql(u8, s.name, target)) {
+                state.active_session_idx = i;
+                break;
+            }
+        }
+    }
+
+    if (g_tmux) |*t| {
+        t.hideStatusBar() catch {};
+        t.enableMouse();
+        t.clearEnvVar("CLAUDECODE");
+    }
+    updateRenderCells();
+}
+
+export fn bridge_is_started() callconv(.c) u8 {
+    return if (g_started) 1 else 0;
+}
+
+export fn bridge_start_first_session() callconv(.c) void {
+    if (g_started) return;
+    startPty(g_initial_cols, g_initial_rows);
 }
 
 export fn bridge_tick() callconv(.c) void {
@@ -186,7 +236,33 @@ export fn bridge_key_input(data: [*]const u8, len: u32) callconv(.c) void {
 export fn bridge_resize(cols: u16, rows: u16) callconv(.c) void {
     if (cols == 0 or rows == 0) return;
     if (!g_started) {
-        startPty(cols, rows);
+        g_initial_cols = cols;
+        g_initial_rows = rows;
+        if (!g_checked) {
+            g_checked = true;
+            // Check for existing tmux sessions to attach to
+            if (g_tmux) |*tmux| {
+                var sessions = tmux.listSessions() catch {
+                    g_redraw = true;
+                    return;
+                };
+                if (sessions.items.len > 0) {
+                    // Copy first session name before freeing the list
+                    const name = sessions.items[0].name;
+                    const nlen = @min(name.len, g_session_name_buf.len - 1);
+                    @memcpy(g_session_name_buf[0..nlen], name[0..nlen]);
+                    g_session_name_buf[nlen] = 0;
+                    sessions.clearRetainingCapacity();
+                    sessions.deinit(tmux.allocator);
+                    startPtyAttach(cols, rows);
+                } else {
+                    sessions.clearRetainingCapacity();
+                    sessions.deinit(tmux.allocator);
+                    logMsg("No existing tmux sessions, showing empty state");
+                    g_redraw = true;
+                }
+            }
+        }
         return;
     }
     if (g_pty) |*pty| pty.setSize(cols, rows);
@@ -436,6 +512,12 @@ export fn bridge_select_session(idx: u16) callconv(.c) void {
 }
 
 export fn bridge_create_session() callconv(.c) void {
+    if (!g_started) {
+        // In empty state: start PTY with a new session
+        startPty(g_initial_cols, g_initial_rows);
+        return;
+    }
+
     const state = &(g_state orelse return);
     const tmux = &(g_tmux orelse return);
 
@@ -463,16 +545,11 @@ export fn bridge_kill_session(idx: u16) callconv(.c) void {
     const target_name = state.sessions.items[idx].name;
     logFmt("kill_session: idx={d}, name={s}, is_last={}", .{ idx, target_name, is_last });
 
-    // If this is the last session, create a replacement FIRST so tmux server stays alive
+    // If this is the last session, just kill it — PTY will HUP and we go to empty state
     if (is_last) {
-        var cwd_buf: [1024]u8 = undefined;
-        const cwd = std.posix.getcwd(&cwd_buf) catch "/tmp";
-        const dir = std.fs.path.basename(cwd);
-        var buf: [64]u8 = undefined;
-        const new_name = std.fmt.bufPrint(&buf, "{s}", .{dir}) catch return;
-        tmux.createSession(new_name) catch {};
-        // Switch our tmux client to the new session before killing
-        tmux.switchSession(new_name) catch {};
+        tmux.killSession(target_name) catch {};
+        // The tmux server exits, PTY gets HUP, reattachOrQuit transitions to empty state
+        return;
     } else {
         // Switch to another session BEFORE killing (so our tmux client doesn't exit)
         const other_idx: usize = if (idx == 0) 1 else idx - 1;
@@ -547,7 +624,9 @@ fn reattachOrQuit() void {
         return;
     });
     var sessions = tmux.listSessions() catch {
-        g_running = false;
+        logMsg("Cannot list sessions, going to empty state");
+        g_started = false;
+        g_redraw = true;
         return;
     };
     defer {
@@ -556,8 +635,8 @@ fn reattachOrQuit() void {
     }
 
     if (sessions.items.len == 0) {
-        logMsg("No tmux sessions remain, quitting");
-        g_running = false;
+        logMsg("No tmux sessions remain, going to empty state");
+        g_started = false;
         g_redraw = true;
         return;
     }

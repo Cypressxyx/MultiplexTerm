@@ -144,10 +144,11 @@ sequenceDiagram
 2. ObjC creates NSWindow, STTerminalView, calls `bridge_init()`
 3. `bridge_init()` creates TmuxManager, AppState
 4. First `setFrameSize` → `recalcTermSize` → `bridge_resize(cols, rows)`
-5. `bridge_resize` calls `startPty()` on first invocation (deferred init)
-6. `startPty()` creates TerminalEngine, opens PTY, spawns `tmux new-session -A -s <dirname> -e CLAUDECODE=`
-7. Hides tmux status bar, enables mouse mode, clears CLAUDECODE from tmux env
-8. NSTimer starts at 60fps calling `tick:` → `bridge_tick()`
+5. `bridge_resize` checks for existing tmux sessions on first invocation (deferred init)
+6. If existing sessions found: `startPtyAttach()` attaches to first session
+7. If no existing sessions: stays in empty state, shows "Start New Session" button
+8. Hides tmux status bar, enables mouse mode, clears CLAUDECODE from tmux env
+9. NSTimer starts at 60fps calling `tick:` → `bridge_tick()`
 
 ### Tick Loop (60fps)
 1. `bridge_tick()` polls PTY master fd for data
@@ -172,7 +173,7 @@ sequenceDiagram
 1. PTY HUP detected → `reattachOrQuit()`
 2. Checks for remaining tmux sessions
 3. If sessions exist: opens new PTY, attaches to first available session
-4. If no sessions: sets `g_running = false` → app terminates
+4. If no sessions: sets `g_started = false` → returns to empty state with "Start New Session" button
 
 ## Code Style
 
@@ -247,7 +248,7 @@ cat /tmp/mterm.log
 
 - **ESC byte ordering**: In parser.zig, `byte == 0x1b` MUST be checked before `byte < 0x20` or all escape sequences break
 - **PTY HUP on session kill**: Must switch to another session BEFORE killing, or tmux client exits and PTY gets HUP
-- **Deferred PTY init**: PTY is spawned on first `bridge_resize`, not at init — avoids blank lines from size mismatch
+- **Deferred PTY init**: On first `bridge_resize`, checks for existing tmux sessions — attaches if found, shows empty state if not. PTY only starts when sessions exist or user clicks "Start New Session"
 - **tmux env inheritance**: CLAUDECODE env var must be cleared at both PTY child level (`unsetenv`) and tmux level (`-e CLAUDECODE=`, `set-environment -g -u`)
 - **Display name early returns**: `syncState()` must always call `updateDisplayNames()` — don't return early before it
 - **Cells bounds**: `drawTerminal` must bounds-check cell index against `bridge_get_cell_count()` to prevent crashes during resize

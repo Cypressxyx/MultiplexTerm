@@ -39,6 +39,8 @@ extern void bridge_toggle_sidebar(void);
 extern const uint8_t* bridge_get_session_display_name(uint16_t idx);
 extern uint16_t bridge_get_session_display_name_len(uint16_t idx);
 extern void bridge_tmux_command(uint8_t cmd_id);
+extern uint8_t bridge_is_started(void);
+extern void bridge_start_first_session(void);
 
 // === Layout constants ===
 static const CGFloat kSidebarWidth    = 220.0;
@@ -312,8 +314,12 @@ static NSString* const kPaletteHints[] = {
     @autoreleasepool {
         [g_bg setFill];
         NSRectFill(self.bounds);
-        [self drawTerminal];
-        if (bridge_get_cursor_visible() && self.cursorBlink) [self drawCursor];
+        if (bridge_is_started()) {
+            [self drawTerminal];
+            if (bridge_get_cursor_visible() && self.cursorBlink) [self drawCursor];
+        } else {
+            [self drawEmptyState];
+        }
         if (bridge_is_sidebar_visible()) [self drawSidebar];
         if (self.paletteVisible) [self drawPalette];
     }
@@ -611,6 +617,39 @@ static NSString* const kPaletteHints[] = {
     }
 }
 
+- (void)drawEmptyState {
+    CGFloat w = self.bounds.size.width;
+    CGFloat h = self.bounds.size.height;
+    CGFloat sbw = [self sidebarPx];
+    CGFloat areaX = sbw;
+    CGFloat areaW = w - sbw;
+    CGFloat centerX = areaX + areaW / 2;
+    CGFloat centerY = h / 2;
+
+    // Button dimensions
+    CGFloat btnW = 180;
+    CGFloat btnH = 40;
+    CGFloat btnX = centerX - btnW / 2;
+    CGFloat btnY = centerY - btnH / 2;
+
+    // Draw button background
+    NSBezierPath* btnPath = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(btnX, btnY, btnW, btnH)
+                                                            xRadius:8 yRadius:8];
+    [g_accent setFill];
+    [btnPath fill];
+
+    // Draw button text
+    NSDictionary* attrs = @{
+        NSFontAttributeName: self.uiFontBold,
+        NSForegroundColorAttributeName: g_bg,
+    };
+    NSString* label = @"Start New Session";
+    NSSize textSize = [label sizeWithAttributes:attrs];
+    CGFloat textX = btnX + (btnW - textSize.width) / 2;
+    CGFloat textY = btnY + (btnH - textSize.height) / 2;
+    [label drawAtPoint:NSMakePoint(textX, textY) withAttributes:attrs];
+}
+
 - (void)drawTerminal {
     uint16_t cols = bridge_get_cols();
     uint16_t rows = bridge_get_rows();
@@ -828,6 +867,25 @@ static NSString* const kPaletteHints[] = {
         self.paletteMode = 0;
         [self setNeedsDisplay:YES];
         return;
+    }
+
+    // Handle empty state button click
+    if (!bridge_is_started()) {
+        CGFloat w = self.bounds.size.width;
+        CGFloat h = self.bounds.size.height;
+        CGFloat sbw = [self sidebarPx];
+        CGFloat centerX = sbw + (w - sbw) / 2;
+        CGFloat centerY = h / 2;
+        CGFloat btnW = 180;
+        CGFloat btnH = 40;
+        CGFloat btnX = centerX - btnW / 2;
+        CGFloat btnY = centerY - btnH / 2;
+
+        if (p.x >= btnX && p.x <= btnX + btnW && p.y >= btnY && p.y <= btnY + btnH) {
+            bridge_start_first_session();
+            [self setNeedsDisplay:YES];
+            return;
+        }
     }
 
     CGFloat listTop = kTitlebarInset + kHeaderHeight;
