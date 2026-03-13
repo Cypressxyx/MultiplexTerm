@@ -13,6 +13,7 @@ MultiplexTerm (CLI: `mterm`) is a native macOS GUI terminal that wraps tmux. It 
 3. **Update README.md** when adding user-facing features (new shortcuts, UI changes, etc.).
 4. **Run `zig build`** to verify compilation before committing.
 5. **Run `zig build lint`** to check for lint issues before committing.
+6. **Local + Remote parity**: Every new feature or functionality must work in both local sessions and SSH remote sessions. If a feature targets the local tmux (e.g., split pane, new window, mouse clicks), it must also be forwarded to the remote tmux when the active session is SSH. Never add a feature that only works locally — always consider the `ssh_` session path.
 
 ## Setup & Build
 
