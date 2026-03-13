@@ -1,4 +1,5 @@
 #import <Cocoa/Cocoa.h>
+#import <UserNotifications/UserNotifications.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -74,6 +75,10 @@ extern uint16_t bridge_get_ssh_active_count(uint16_t host_idx);
 extern uint16_t bridge_get_ssh_active_session_idx(uint16_t host_idx, uint16_t nth);
 extern const uint8_t* bridge_get_ssh_active_display(uint16_t host_idx, uint16_t nth);
 extern uint16_t bridge_get_ssh_active_display_len(uint16_t host_idx, uint16_t nth);
+extern uint8_t bridge_session_needs_attention(uint16_t idx);
+extern const uint8_t* bridge_get_attention_message(uint16_t idx);
+extern uint16_t bridge_get_attention_message_len(uint16_t idx);
+extern uint8_t bridge_get_pending_notification(uint16_t* idx_out);
 
 // === Layout constants ===
 static const CGFloat kSidebarWidth    = 220.0;
@@ -339,6 +344,32 @@ static NSString* const kPaletteHints[] = {
         [self setNeedsDisplay:YES];
     }
 
+    // Check for pending agent attention notifications
+    uint16_t notifIdx = 0;
+    if (bridge_get_pending_notification(&notifIdx) && ![NSApp isActive]) {
+        uint16_t dLen = bridge_get_session_display_name_len(notifIdx);
+        const uint8_t* dPtr = bridge_get_session_display_name(notifIdx);
+        NSString* sessionName = [[NSString alloc] initWithBytes:dPtr length:dLen encoding:NSUTF8StringEncoding];
+
+        uint16_t msgLen = bridge_get_attention_message_len(notifIdx);
+        const uint8_t* msgPtr = bridge_get_attention_message(notifIdx);
+        NSString* message = msgLen > 0
+            ? [[NSString alloc] initWithBytes:msgPtr length:msgLen encoding:NSUTF8StringEncoding]
+            : @"Waiting for input...";
+
+        UNMutableNotificationContent* content = [[UNMutableNotificationContent alloc] init];
+        content.title = sessionName ?: @"mterm";
+        content.body = message;
+        content.sound = [UNNotificationSound defaultSound];
+
+        NSString* identifier = [NSString stringWithFormat:@"mterm-attention-%d", notifIdx];
+        UNNotificationRequest* request = [UNNotificationRequest requestWithIdentifier:identifier
+                                                                              content:content
+                                                                              trigger:nil];
+        [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request
+                                                                   withCompletionHandler:nil];
+    }
+
     if (bridge_needs_redraw()) {
         bridge_clear_redraw();
         [self setNeedsDisplay:YES];
@@ -443,14 +474,39 @@ static NSString* const kPaletteHints[] = {
         if (!name) name = @"?";
 
         CGFloat textX = kSidebarPadH + 14; // always reserve dot space
-        CGFloat textY = y + (kSessionRowH - 16) / 2;
+        uint8_t needsAttention = bridge_session_needs_attention(i);
 
-        NSDictionary* nameAttrs = @{
-            NSFontAttributeName: sel ? self.uiFontBold : self.uiFont,
-            NSForegroundColorAttributeName: sel ? g_text : g_textDim,
-            NSParagraphStyleAttributeName: truncStyle,
-        };
-        [name drawInRect:NSMakeRect(textX, textY, sw - 28 - textX, kSessionRowH) withAttributes:nameAttrs];
+        if (needsAttention) {
+            // Two-line layout: name at top, subtitle below
+            CGFloat nameY = y + 3;
+            NSDictionary* nameAttrs = @{
+                NSFontAttributeName: sel ? self.uiFontBold : self.uiFont,
+                NSForegroundColorAttributeName: sel ? g_text : g_textDim,
+                NSParagraphStyleAttributeName: truncStyle,
+            };
+            [name drawInRect:NSMakeRect(textX, nameY, sw - 28 - textX, 16) withAttributes:nameAttrs];
+
+            // Attention subtitle
+            uint16_t msgLen = bridge_get_attention_message_len(i);
+            const uint8_t* msgPtr = bridge_get_attention_message(i);
+            NSString* subtitle = msgLen > 0
+                ? [[NSString alloc] initWithBytes:msgPtr length:msgLen encoding:NSUTF8StringEncoding]
+                : @"Waiting for input...";
+            NSDictionary* subAttrs = @{
+                NSFontAttributeName: [NSFont monospacedSystemFontOfSize:9 weight:NSFontWeightRegular],
+                NSForegroundColorAttributeName: g_accent,
+                NSParagraphStyleAttributeName: truncStyle,
+            };
+            [subtitle drawInRect:NSMakeRect(textX, nameY + 15, sw - 28 - textX, 14) withAttributes:subAttrs];
+        } else {
+            CGFloat textY = y + (kSessionRowH - 16) / 2;
+            NSDictionary* nameAttrs = @{
+                NSFontAttributeName: sel ? self.uiFontBold : self.uiFont,
+                NSForegroundColorAttributeName: sel ? g_text : g_textDim,
+                NSParagraphStyleAttributeName: truncStyle,
+            };
+            [name drawInRect:NSMakeRect(textX, textY, sw - 28 - textX, kSessionRowH) withAttributes:nameAttrs];
+        }
 
         // Close "×" button (visible on hover or selected)
         if (sel || self.hoveredSession == i) {
@@ -602,13 +658,37 @@ static NSString* const kPaletteHints[] = {
                     NSString* dName = [[NSString alloc] initWithBytes:dPtr length:dLen encoding:NSUTF8StringEncoding];
                     if (!dName) dName = @"?";
 
-                    NSDictionary* activeAttrs = @{
-                        NSFontAttributeName: isSel ? self.uiFontBold : self.uiFont,
-                        NSForegroundColorAttributeName: isSel ? g_text : g_textDim,
-                        NSParagraphStyleAttributeName: truncStyle,
-                    };
                     CGFloat aTextX = kSidebarPadH + 26;
-                    [dName drawInRect:NSMakeRect(aTextX, y + (kRecentRowH - 14) / 2, sw - 28 - aTextX, kRecentRowH) withAttributes:activeAttrs];
+                    uint8_t sshNeedsAttention = (sessIdx != 0xFFFF) ? bridge_session_needs_attention(sessIdx) : 0;
+
+                    if (sshNeedsAttention) {
+                        NSDictionary* activeAttrs = @{
+                            NSFontAttributeName: isSel ? self.uiFontBold : self.uiFont,
+                            NSForegroundColorAttributeName: isSel ? g_text : g_textDim,
+                            NSParagraphStyleAttributeName: truncStyle,
+                        };
+                        CGFloat nameY = y + 1;
+                        [dName drawInRect:NSMakeRect(aTextX, nameY, sw - 28 - aTextX, 14) withAttributes:activeAttrs];
+
+                        uint16_t aMsgLen = bridge_get_attention_message_len(sessIdx);
+                        const uint8_t* aMsgPtr = bridge_get_attention_message(sessIdx);
+                        NSString* aSubtitle = aMsgLen > 0
+                            ? [[NSString alloc] initWithBytes:aMsgPtr length:aMsgLen encoding:NSUTF8StringEncoding]
+                            : @"Waiting for input...";
+                        NSDictionary* aSubAttrs = @{
+                            NSFontAttributeName: [NSFont monospacedSystemFontOfSize:9 weight:NSFontWeightRegular],
+                            NSForegroundColorAttributeName: g_accent,
+                            NSParagraphStyleAttributeName: truncStyle,
+                        };
+                        [aSubtitle drawInRect:NSMakeRect(aTextX, nameY + 13, sw - 28 - aTextX, 12) withAttributes:aSubAttrs];
+                    } else {
+                        NSDictionary* activeAttrs = @{
+                            NSFontAttributeName: isSel ? self.uiFontBold : self.uiFont,
+                            NSForegroundColorAttributeName: isSel ? g_text : g_textDim,
+                            NSParagraphStyleAttributeName: truncStyle,
+                        };
+                        [dName drawInRect:NSMakeRect(aTextX, y + (kRecentRowH - 14) / 2, sw - 28 - aTextX, kRecentRowH) withAttributes:activeAttrs];
+                    }
 
                     // × close button on hover or selected
                     if (isSel || self.hoveredSshSession == encodedActive) {
@@ -2852,6 +2932,13 @@ static NSString* const kPaletteHints[] = {
     if (!getenv("LC_ALL")) {
         setenv("LC_ALL", "en_US.UTF-8", 1);
     }
+
+    // Request notification permission for agent attention alerts
+    UNUserNotificationCenter* center = [UNUserNotificationCenter currentNotificationCenter];
+    [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
+                          completionHandler:^(BOOL granted, NSError* error) {
+        (void)granted; (void)error;
+    }];
 
     NSRect frame = NSMakeRect(100, 100, 1280, 820);
     NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |

@@ -208,6 +208,28 @@ export fn bridge_tick() callconv(.c) void {
         if (n > 0) {
             engine.process(buf[0..n]);
             g_redraw = true;
+
+            // Check for bell/OSC 9 from the active session
+            if (engine.bell_fired) {
+                if (g_state) |*state| {
+                    if (state.active_session_idx) |idx| {
+                        if (idx < MAX_SESSIONS and isAgentSession(idx)) {
+                            g_attention[idx] = true;
+                            if (engine.osc9_len > 0) {
+                                const mlen = @min(engine.osc9_len, 128);
+                                @memcpy(g_attention_msgs[idx][0..mlen], engine.osc9_message[0..mlen]);
+                                g_attention_msg_lens[idx] = @intCast(mlen);
+                            } else if (g_attention_msg_lens[idx] == 0) {
+                                const default = "Waiting for input...";
+                                @memcpy(g_attention_msgs[idx][0..default.len], default);
+                                g_attention_msg_lens[idx] = default.len;
+                            }
+                        }
+                    }
+                }
+                engine.bell_fired = false;
+                engine.osc9_len = 0;
+            }
         }
     }
 
@@ -235,6 +257,17 @@ export fn bridge_tick() callconv(.c) void {
 export fn bridge_key_input(data: [*]const u8, len: u32) callconv(.c) void {
     var pty = &(g_pty orelse return);
     const bytes = data[0..len];
+
+    // Clear attention flag when user sends input
+    if (g_state) |*state| {
+        if (state.active_session_idx) |idx| {
+            if (idx < MAX_SESSIONS) {
+                g_attention[idx] = false;
+                g_attention_msg_lens[idx] = 0;
+                g_notification_sent[idx] = false;
+            }
+        }
+    }
 
     for (bytes) |byte| {
         if (g_leader) {
@@ -339,6 +372,40 @@ const MAX_SESSIONS = 32;
 const MAX_DISPLAY = 64;
 var g_display_bufs: [MAX_SESSIONS][MAX_DISPLAY]u8 = undefined;
 var g_display_lens: [MAX_SESSIONS]u16 = [_]u16{0} ** MAX_SESSIONS;
+
+// --- Attention / notification state ---
+var g_attention: [MAX_SESSIONS]bool = [_]bool{false} ** MAX_SESSIONS;
+var g_attention_msgs: [MAX_SESSIONS][128]u8 = undefined;
+var g_attention_msg_lens: [MAX_SESSIONS]u8 = [_]u8{0} ** MAX_SESSIONS;
+var g_notification_sent: [MAX_SESSIONS]bool = [_]bool{false} ** MAX_SESSIONS;
+
+export fn bridge_session_needs_attention(idx: u16) callconv(.c) u8 {
+    if (idx < MAX_SESSIONS and g_attention[idx]) return 1;
+    return 0;
+}
+
+export fn bridge_get_attention_message(idx: u16) callconv(.c) [*]const u8 {
+    if (idx < MAX_SESSIONS and g_attention_msg_lens[idx] > 0)
+        return &g_attention_msgs[idx];
+    return "".ptr;
+}
+
+export fn bridge_get_attention_message_len(idx: u16) callconv(.c) u16 {
+    if (idx < MAX_SESSIONS) return g_attention_msg_lens[idx];
+    return 0;
+}
+
+/// Returns 1 if any session has a pending (unsent) notification
+export fn bridge_get_pending_notification(idx_out: *u16) callconv(.c) u8 {
+    for (0..MAX_SESSIONS) |i| {
+        if (g_attention[i] and !g_notification_sent[i]) {
+            idx_out.* = @intCast(i);
+            g_notification_sent[i] = true;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 // --- Recent projects ---
 const MAX_RECENT = 10;
@@ -490,6 +557,27 @@ fn isVersionString(cmd: []const u8) bool {
         }
     }
     return has_dot;
+}
+
+/// Check if session at idx is running a known AI agent (Claude Code, etc.)
+fn isAgentSession(idx: usize) bool {
+    if (idx >= MAX_SESSIONS) return false;
+    const state = &(g_state orelse return false);
+    if (idx >= state.sessions.items.len) return false;
+    const cmd = state.sessions.items[idx].active_command;
+    // Direct command match
+    const agents = [_][]const u8{ "claude", "opencode", "gemini", "kiro", "codex", "aider", "cursor" };
+    for (agents) |a| {
+        if (std.mem.eql(u8, cmd, a)) return true;
+    }
+    // Claude Code sets process title to version string (e.g., "2.1.74")
+    if (isVersionString(cmd)) return true;
+    // Also check display name for SSH sessions (command shows "ssh" but display may show "Claude Code")
+    if (g_display_lens[idx] > 0) {
+        const display = g_display_bufs[idx][0..g_display_lens[idx]];
+        if (std.mem.indexOf(u8, display, "Claude Code") != null) return true;
+    }
+    return false;
 }
 
 fn isShell(cmd: []const u8) bool {
@@ -1331,6 +1419,12 @@ export fn bridge_select_session(idx: u16) callconv(.c) void {
     const tmux = &(g_tmux orelse return);
     if (idx < state.sessions.items.len) {
         state.active_session_idx = idx;
+        // Clear attention when user switches to a session
+        if (idx < MAX_SESSIONS) {
+            g_attention[idx] = false;
+            g_attention_msg_lens[idx] = 0;
+            g_notification_sent[idx] = false;
+        }
         if (state.activeSessionName()) |name| tmux.switchSession(name) catch {};
         g_redraw = true;
     }

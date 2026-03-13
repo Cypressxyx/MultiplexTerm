@@ -10,6 +10,9 @@ pub const VtParser = struct {
     utf8_buf: [4]u8 = undefined,
     utf8_len: u3 = 0,
     utf8_need: u3 = 0,
+    // OSC content buffer
+    osc_buf: [256]u8 = undefined,
+    osc_len: u16 = 0,
 
     const State = enum {
         ground,
@@ -24,11 +27,16 @@ pub const VtParser = struct {
         charset,
     };
 
+    pub const OscEvent = struct {
+        number: u16,
+        payload: []const u8,
+    };
+
     pub const Event = union(enum) {
         print: u21,
         execute: u8,
         csi: CsiEvent,
-        osc: void,
+        osc: OscEvent,
         reset: void,
         newline: void,
         carriage_return: void,
@@ -55,7 +63,7 @@ pub const VtParser = struct {
             .escape_intermediate => self.handleEscapeIntermediate(byte, callback),
             .csi_entry, .csi_param => self.handleCsi(byte, callback),
             .csi_intermediate => self.handleCsiIntermediate(byte, callback),
-            .osc_string => self.handleOsc(byte),
+            .osc_string => self.handleOsc(byte, callback),
             .dcs_passthrough => self.handleDcs(byte),
             .utf8_seq => self.handleUtf8(byte, callback),
             .charset => {
@@ -146,7 +154,10 @@ pub const VtParser = struct {
                 self.intermediate = 0;
                 self.private_marker = 0;
             },
-            ']' => self.state = .osc_string,
+            ']' => {
+                self.osc_len = 0;
+                self.state = .osc_string;
+            },
             'P' => self.state = .dcs_passthrough,
             'c' => {
                 callback.onEvent(.reset);
@@ -252,13 +263,41 @@ pub const VtParser = struct {
         }
     }
 
-    fn handleOsc(self: *VtParser, byte: u8) void {
+    fn handleOsc(self: *VtParser, byte: u8, callback: anytype) void {
         if (byte == 0x07) {
+            self.emitOsc(callback);
             self.state = .ground;
         } else if (byte == 0x1b) {
+            self.emitOsc(callback);
             // ST = ESC \ — need to consume the backslash
             self.state = .escape;
+        } else {
+            if (self.osc_len < self.osc_buf.len) {
+                self.osc_buf[self.osc_len] = byte;
+                self.osc_len += 1;
+            }
         }
+    }
+
+    fn emitOsc(self: *VtParser, callback: anytype) void {
+        if (self.osc_len == 0) return;
+        const content = self.osc_buf[0..self.osc_len];
+        // Parse "NUMBER;payload" — find the semicolon
+        var number: u16 = 0;
+        var payload_start: u16 = 0;
+        for (content, 0..) |c, i| {
+            if (c == ';') {
+                payload_start = @intCast(i + 1);
+                break;
+            }
+            if (c >= '0' and c <= '9') {
+                number = number *| 10 +| (c - '0');
+            } else {
+                return; // invalid OSC number
+            }
+        }
+        const payload = if (payload_start < self.osc_len) content[payload_start..] else &[_]u8{};
+        callback.onEvent(.{ .osc = .{ .number = number, .payload = payload } });
     }
 
     fn handleDcs(self: *VtParser, byte: u8) void {
