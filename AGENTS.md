@@ -9,7 +9,7 @@ MultiplexTerm (CLI: `mterm`) is a native macOS GUI terminal that wraps tmux. It 
 ## Agent Rules
 
 1. **Always update this file** when adding new functionality — document new files, data flows, conventions, and pitfalls.
-2. **Always add unit tests** for every change. Run `zig build test` to verify before committing.
+2. **Always add unit tests** for every new feature and bug fix — no exceptions. Test the specific behavior that was added or fixed (e.g., new struct fields, parsing edge cases, return value semantics). Run `zig build test` to verify before committing.
 3. **Update README.md** when adding user-facing features (new shortcuts, UI changes, etc.).
 4. **Run `zig build`** to verify compilation before committing.
 5. **Run `zig build lint`** to check for lint issues before committing.
