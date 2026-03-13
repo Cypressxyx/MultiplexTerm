@@ -19,7 +19,6 @@ pub fn build(b: *std.Build) void {
 
     // Link macOS frameworks
     exe_mod.linkFramework("Cocoa", .{});
-    exe_mod.linkFramework("UserNotifications", .{});
 
     const exe = b.addExecutable(.{
         .name = "mterm",

@@ -7,9 +7,6 @@ pub const TerminalEngine = struct {
     screen: Screen,
     response_buf: [64]u8 = undefined,
     response_len: u8 = 0,
-    bell_fired: bool = false,
-    osc9_message: [128]u8 = undefined,
-    osc9_len: u8 = 0,
 
     const EventHandler = struct {
         engine: *TerminalEngine,
@@ -22,9 +19,7 @@ pub const TerminalEngine = struct {
                 .carriage_return => screen.carriageReturn(),
                 .backspace => screen.backspace(),
                 .tab => screen.tab(),
-                .bell => {
-                    self.engine.bell_fired = true;
-                },
+                .bell => {},
                 .save_cursor => screen.saveCursor(),
                 .restore_cursor => screen.restoreCursor(),
                 .reverse_index => screen.reverseIndex(),
@@ -40,14 +35,7 @@ pub const TerminalEngine = struct {
                 },
                 .csi => |csi| self.engine.handleCsi(csi),
                 .execute => {},
-                .osc => |osc| {
-                    if (osc.number == 9 and osc.payload.len > 0) {
-                        const mlen = @min(osc.payload.len, 128);
-                        @memcpy(self.engine.osc9_message[0..mlen], osc.payload[0..mlen]);
-                        self.engine.osc9_len = @intCast(mlen);
-                        self.engine.bell_fired = true;
-                    }
-                },
+                .osc => {},
             }
         }
     };
