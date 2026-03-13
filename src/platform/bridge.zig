@@ -208,6 +208,18 @@ export fn bridge_tick() callconv(.c) void {
         if (n > 0) {
             engine.process(buf[0..n]);
             g_redraw = true;
+            g_idle_ticks = 0; // Reset idle counter on any output
+
+            // Clear attention when new output arrives (agent is working again)
+            if (g_state) |*state| {
+                if (state.active_session_idx) |idx| {
+                    if (idx < MAX_SESSIONS and g_attention[idx]) {
+                        g_attention[idx] = false;
+                        g_attention_msg_lens[idx] = 0;
+                        g_notification_sent[idx] = false;
+                    }
+                }
+            }
 
             // Check for bell/OSC 9 from the active session
             if (engine.bell_fired) {
@@ -229,6 +241,26 @@ export fn bridge_tick() callconv(.c) void {
                 }
                 engine.bell_fired = false;
                 engine.osc9_len = 0;
+            }
+        } else {
+            g_idle_ticks +|= 1;
+        }
+    } else {
+        g_idle_ticks +|= 1;
+    }
+
+    // Idle detection: if agent session has no output for ~3s, mark as needing attention
+    if (g_idle_ticks == IDLE_ATTENTION_TICKS) {
+        if (g_state) |*state| {
+            if (state.active_session_idx) |idx| {
+                if (idx < MAX_SESSIONS and isAgentSession(idx) and !g_attention[idx]) {
+                    g_attention[idx] = true;
+                    const default = "Waiting for input...";
+                    @memcpy(g_attention_msgs[idx][0..default.len], default);
+                    g_attention_msg_lens[idx] = default.len;
+                    g_redraw = true;
+                    logFmt("Idle attention triggered for session {d}", .{idx});
+                }
             }
         }
     }
@@ -258,7 +290,8 @@ export fn bridge_key_input(data: [*]const u8, len: u32) callconv(.c) void {
     var pty = &(g_pty orelse return);
     const bytes = data[0..len];
 
-    // Clear attention flag when user sends input
+    // Clear attention flag and reset idle counter when user sends input
+    g_idle_ticks = 0;
     if (g_state) |*state| {
         if (state.active_session_idx) |idx| {
             if (idx < MAX_SESSIONS) {
@@ -378,6 +411,8 @@ var g_attention: [MAX_SESSIONS]bool = [_]bool{false} ** MAX_SESSIONS;
 var g_attention_msgs: [MAX_SESSIONS][128]u8 = undefined;
 var g_attention_msg_lens: [MAX_SESSIONS]u8 = [_]u8{0} ** MAX_SESSIONS;
 var g_notification_sent: [MAX_SESSIONS]bool = [_]bool{false} ** MAX_SESSIONS;
+var g_idle_ticks: u32 = 0; // ticks since last PTY output (active session only)
+const IDLE_ATTENTION_TICKS: u32 = 180; // ~3 seconds at 60fps
 
 export fn bridge_session_needs_attention(idx: u16) callconv(.c) u8 {
     if (idx < MAX_SESSIONS and g_attention[idx]) return 1;

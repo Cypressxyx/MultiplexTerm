@@ -227,15 +227,18 @@ sequenceDiagram
 14. FFI: `bridge_load_ssh_suggestions()`, `bridge_get_ssh_suggestion_count/name/name_len()` expose suggestions to ObjC for the Add Host palette
 
 ### Agent Attention Notifications
-1. When an AI agent (Claude Code, opencode, gemini, kiro, codex, aider, cursor) is waiting for user input, it sends a BEL character (0x07) or OSC 9 escape sequence (`ESC ] 9 ; message BEL`)
+1. Two detection methods (both active, whichever fires first):
+   - **BEL/OSC 9**: Agent sends BEL (0x07) or OSC 9 (`ESC ] 9 ; message BEL`) — instant detection
+   - **Idle timeout**: No PTY output for ~3 seconds (`IDLE_ATTENTION_TICKS = 180` at 60fps) on an agent session — fallback for agents that don't send BEL
 2. `TerminalEngine` captures `bell_fired` and `osc9_message` on each `process()` call
 3. In `bridge_tick()`, after processing PTY output, if `bell_fired` is set and the active session is an agent session (`isAgentSession()`), attention state is set for that session
-4. OSC 9 payload is used as the attention message; if only BEL, defaults to "Waiting for input..."
-5. Sidebar shows attention subtitle below session name in accent color (both SESSIONS and REMOTE active sessions)
-6. Native macOS notification sent via `UNUserNotificationCenter` when app is not active (one per attention event, tracked by `g_notification_sent[]`)
-7. Attention cleared on any user key input (`bridge_key_input()`) or session selection (`bridge_select_session()`)
-8. `isAgentSession(idx)` checks: known agent command names, version-string display names, "Claude Code" display name
-9. FFI: `bridge_session_needs_attention(idx)`, `bridge_get_attention_message/len(idx)`, `bridge_get_pending_notification(idx_out)`
+4. OSC 9 payload is used as the attention message; if only BEL or idle timeout, defaults to "Waiting for input..."
+5. **Auto-clear on output**: When new PTY output arrives for a session with attention, the attention is cleared (agent is working again)
+6. Sidebar shows attention subtitle below session name in accent color (both SESSIONS and REMOTE active sessions)
+7. Native macOS notification sent via `UNUserNotificationCenter` when app is not active (one per attention event, tracked by `g_notification_sent[]`)
+8. Attention cleared on any user key input (`bridge_key_input()`) or session selection (`bridge_select_session()`)
+9. `isAgentSession(idx)` checks: known agent command names, version-string display names, "Claude Code" display name
+10. FFI: `bridge_session_needs_attention(idx)`, `bridge_get_attention_message/len(idx)`, `bridge_get_pending_notification(idx_out)`
 
 ### Session Exit / HUP
 1. PTY HUP detected → `reattachOrQuit()`
@@ -417,5 +420,5 @@ cat /tmp/mterm.log
 - **SSH palette command forwarding**: `runTmuxCmd()` must detect SSH sessions and forward commands to the remote tmux via `ssh HOST "tmux ..."` instead of running them locally. Otherwise split-pane/new-window/etc. affect the local single-pane SSH session, not the remote tmux.
 - **SSH probe session filtering**: `bridge_get_ssh_session_count/name/name_len` must filter out remote sessions that are already attached via local SSH sessions (e.g., hide probe result "8" when `ssh_host/8` exists). `bridge_select_ssh_session` and `bridge_kill_remote_session` must map filtered indices back to raw probe indices via `mapFilteredSshSession()`.
 - **Drag-and-drop path escaping**: File paths from Finder drag must be shell-escaped (spaces, quotes, parens) before sending to PTY, or commands will break on paths with special characters.
-- **Agent attention detection**: Uses BEL (0x07) and OSC 9 (`ESC]9;messageBEL`) — event-driven, zero polling. Only fires for agent sessions (`isAgentSession()`). Must clear `bell_fired` and `osc9_len` after processing in `bridge_tick()`. Attention cleared on user input or session switch.
+- **Agent attention detection**: Two methods: (1) BEL/OSC 9 — instant, event-driven; (2) idle timeout (~3s no output) — fallback. Only fires for agent sessions (`isAgentSession()`). Must clear `bell_fired` and `osc9_len` after processing in `bridge_tick()`. Attention auto-clears when new output arrives, or on user input/session switch. `g_idle_ticks` resets on PTY output AND on key input.
 - **Notification deduplication**: `g_notification_sent[idx]` prevents repeated macOS notifications for the same attention event. Reset on user input (`bridge_key_input`) alongside `g_attention` and `g_attention_msg_lens`.
