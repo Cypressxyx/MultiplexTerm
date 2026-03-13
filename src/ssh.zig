@@ -138,10 +138,15 @@ fn hasWildcard(s: []const u8) bool {
     return false;
 }
 
+pub const ProbeResult = struct {
+    count: u8,
+    ssh_ok: bool, // true = SSH succeeded (even if 0 sessions), false = SSH failed
+};
+
 /// List tmux sessions on a remote host via SSH.
 /// This is a blocking call (runs ssh subprocess).
-/// Returns the number of sessions found, filling `out`.
-pub fn listRemoteSessions(allocator: std.mem.Allocator, host_name: []const u8, out: []RemoteSession) u8 {
+/// Returns probe result with count and whether SSH itself succeeded.
+pub fn listRemoteSessions(allocator: std.mem.Allocator, host_name: []const u8, out: []RemoteSession) ProbeResult {
     const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &.{
@@ -155,11 +160,16 @@ pub fn listRemoteSessions(allocator: std.mem.Allocator, host_name: []const u8, o
             host_name,
             "tmux list-sessions -F '#{session_name}'",
         },
-    }) catch return 0;
+    }) catch return .{ .count = 0, .ssh_ok = false };
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    if (result.term.Exited != 0) return 0;
+    // Non-zero exit: could be SSH failure or tmux not running (both are "SSH ok" if exit code is 1 for no server)
+    // Exit code 1 from tmux = no sessions/server. Other codes = SSH failure.
+    if (result.term.Exited != 0) {
+        // tmux list-sessions exits 1 when no tmux server is running — that's a valid "0 sessions" result
+        return .{ .count = 0, .ssh_ok = result.term.Exited == 1 };
+    }
 
     var count: u8 = 0;
     var sess_lines = std.mem.splitScalar(u8, result.stdout, '\n');
@@ -172,7 +182,7 @@ pub fn listRemoteSessions(allocator: std.mem.Allocator, host_name: []const u8, o
         out[count].name_len = @intCast(slen);
         count += 1;
     }
-    return count;
+    return .{ .count = count, .ssh_ok = true };
 }
 
 /// Parse a host string like "host", "user@host", or "user@host:port" into an SshHost.
@@ -269,4 +279,27 @@ test "startsWithIgnoreCase" {
     try std.testing.expect(startsWithIgnoreCase("HOST foo", "host "));
     try std.testing.expect(startsWithIgnoreCase("HostName bar", "hostname "));
     try std.testing.expect(!startsWithIgnoreCase("Ho", "host "));
+}
+
+test "ProbeResult struct" {
+    // Verify ProbeResult fields work correctly
+    const ok_with_sessions = ProbeResult{ .count = 3, .ssh_ok = true };
+    try std.testing.expectEqual(@as(u8, 3), ok_with_sessions.count);
+    try std.testing.expect(ok_with_sessions.ssh_ok);
+
+    const ok_no_sessions = ProbeResult{ .count = 0, .ssh_ok = true };
+    try std.testing.expectEqual(@as(u8, 0), ok_no_sessions.count);
+    try std.testing.expect(ok_no_sessions.ssh_ok);
+
+    const ssh_failed = ProbeResult{ .count = 0, .ssh_ok = false };
+    try std.testing.expectEqual(@as(u8, 0), ssh_failed.count);
+    try std.testing.expect(!ssh_failed.ssh_ok);
+}
+
+test "listRemoteSessions with invalid host" {
+    // Probing a non-existent host should return ssh_ok=false
+    var sessions: [32]RemoteSession = undefined;
+    const probe = listRemoteSessions(std.testing.allocator, "nonexistent-host-that-does-not-exist-12345", &sessions);
+    try std.testing.expectEqual(@as(u8, 0), probe.count);
+    try std.testing.expect(!probe.ssh_ok);
 }

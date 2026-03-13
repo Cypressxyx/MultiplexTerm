@@ -874,27 +874,26 @@ fn sshProbeThreadFn() void {
     logFmt("SSH probe: connecting to {s}", .{name});
 
     var sessions: [32]ssh_mod.RemoteSession = undefined;
-    const count = ssh_mod.listRemoteSessions(std.heap.page_allocator, name, &sessions);
+    const probe = ssh_mod.listRemoteSessions(std.heap.page_allocator, name, &sessions);
 
-    if (count == 0 and was_connected) {
-        // Re-probe returned 0 but host was already connected — keep existing sessions
-        // (probe may have failed due to transient SSH issue)
+    if (!probe.ssh_ok and was_connected) {
+        // SSH failed on re-probe of connected host — keep existing sessions
+        // (transient SSH issue, don't wipe the sidebar)
         host.status = .connected;
-    } else if (count == 0) {
-        // First probe returned 0 — connected with no remote tmux sessions
-        host.session_count = 0;
-        host.status = .connected;
-        host.expanded = true;
+    } else if (!probe.ssh_ok) {
+        // SSH failed on first probe
+        host.status = .err;
     } else {
-        for (0..count) |i| {
+        // SSH succeeded — update sessions (even if count is 0)
+        for (0..probe.count) |i| {
             host.sessions[i] = sessions[i];
         }
-        host.session_count = count;
+        host.session_count = probe.count;
         host.status = .connected;
         host.expanded = true;
     }
 
-    logFmt("SSH probe: {s} -> {d} sessions", .{ name, count });
+    logFmt("SSH probe: {s} -> {d} sessions (ssh_ok={any})", .{ name, probe.count, probe.ssh_ok });
     g_redraw = true;
     g_ssh_probe_thread = null;
 }
