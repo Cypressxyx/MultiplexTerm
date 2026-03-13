@@ -78,9 +78,9 @@ pub fn build(b: *std.Build) void {
         \\  <key>CFBundleIdentifier</key>
         \\  <string>com.multiplexterm.mterm</string>
         \\  <key>CFBundleVersion</key>
-        \\  <string>1.5.0</string>
+        \\  <string>1.5.1</string>
         \\  <key>CFBundleShortVersionString</key>
-        \\  <string>1.5.0</string>
+        \\  <string>1.5.1</string>
         \\  <key>CFBundleExecutable</key>
         \\  <string>mterm</string>
         \\  <key>CFBundleIconFile</key>
