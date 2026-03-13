@@ -249,12 +249,14 @@ export fn bridge_tick() callconv(.c) void {
         g_idle_ticks +|= 1;
     }
 
-    // Idle detection: if agent session has no output for ~3s, mark as needing attention
-    if (g_idle_ticks == IDLE_ATTENTION_TICKS) {
+    // Idle detection: if agent session has no output for ~3s AFTER user sent input, trigger attention.
+    // g_awaiting_response ensures we only fire after user interacted (not on idle sessions with no message sent).
+    if (g_idle_ticks == IDLE_ATTENTION_TICKS and g_awaiting_response) {
         if (g_state) |*state| {
             if (state.active_session_idx) |idx| {
                 if (idx < MAX_SESSIONS and isAgentSession(idx) and !g_attention[idx]) {
                     g_attention[idx] = true;
+                    g_awaiting_response = false;
                     const default = "Waiting for input...";
                     @memcpy(g_attention_msgs[idx][0..default.len], default);
                     g_attention_msg_lens[idx] = default.len;
@@ -298,6 +300,10 @@ export fn bridge_key_input(data: [*]const u8, len: u32) callconv(.c) void {
                 g_attention[idx] = false;
                 g_attention_msg_lens[idx] = 0;
                 g_notification_sent[idx] = false;
+                // Mark that we're expecting a response from this agent
+                if (isAgentSession(idx)) {
+                    g_awaiting_response = true;
+                }
             }
         }
     }
@@ -412,6 +418,7 @@ var g_attention_msgs: [MAX_SESSIONS][128]u8 = undefined;
 var g_attention_msg_lens: [MAX_SESSIONS]u8 = [_]u8{0} ** MAX_SESSIONS;
 var g_notification_sent: [MAX_SESSIONS]bool = [_]bool{false} ** MAX_SESSIONS;
 var g_idle_ticks: u32 = 0; // ticks since last PTY output (active session only)
+var g_awaiting_response: bool = false; // true after user sends input to an agent session
 const IDLE_ATTENTION_TICKS: u32 = 180; // ~3 seconds at 60fps
 
 export fn bridge_session_needs_attention(idx: u16) callconv(.c) u8 {
@@ -1454,7 +1461,9 @@ export fn bridge_select_session(idx: u16) callconv(.c) void {
     const tmux = &(g_tmux orelse return);
     if (idx < state.sessions.items.len) {
         state.active_session_idx = idx;
-        // Clear attention when user switches to a session
+        // Clear attention and idle state when user switches to a session
+        g_awaiting_response = false;
+        g_idle_ticks = 0;
         if (idx < MAX_SESSIONS) {
             g_attention[idx] = false;
             g_attention_msg_lens[idx] = 0;
