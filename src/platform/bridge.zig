@@ -1086,12 +1086,16 @@ export fn bridge_create_ssh_shell(host_idx: u16) callconv(.c) void {
 
     // Local tmux session runs: ssh HOST -t 'tmux new-session; set destroy-unattached'
     // destroy-unattached ensures the remote session is killed when SSH disconnects
-    const result = std.process.Child.run(.{
-        .allocator = g_allocator,
-        .argv = &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name, "-t", "tmux new-session \\; set-option destroy-unattached on \\; set-option mouse on" },
-    }) catch return;
-    g_allocator.free(result.stdout);
-    g_allocator.free(result.stderr);
+    // Use spawn+wait with Ignore stdout/stderr instead of Child.run to avoid pipe
+    // blocking when tmux leaks FDs to long-running SSH child processes.
+    var child = std.process.Child.init(
+        &.{ "tmux", "new-session", "-d", "-s", local_name, "-e", "CLAUDECODE=", "ssh", host_name, "-t", "tmux new-session \\; set-option destroy-unattached on \\; set-option mouse on" },
+        g_allocator,
+    );
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    child.spawn() catch return;
+    _ = child.wait() catch return;
 
     if (!g_started) {
         const nlen = @min(local_name.len, g_session_name_buf.len - 1);
