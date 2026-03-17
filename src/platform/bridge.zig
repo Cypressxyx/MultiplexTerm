@@ -334,6 +334,23 @@ export fn bridge_get_session_name_len(idx: u16) callconv(.c) u16 {
     return 0;
 }
 
+export fn bridge_get_session_path(idx: u16) callconv(.c) [*]const u8 {
+    if (g_state) |*s| {
+        if (idx < s.sessions.items.len) {
+            const path = s.sessions.items[idx].active_path;
+            if (path.len > 0) return path.ptr;
+        }
+    }
+    return "".ptr;
+}
+
+export fn bridge_get_session_path_len(idx: u16) callconv(.c) u16 {
+    if (g_state) |*s| {
+        if (idx < s.sessions.items.len) return @intCast(s.sessions.items[idx].active_path.len);
+    }
+    return 0;
+}
+
 // --- Display names (auto-computed from active command / path) ---
 const MAX_SESSIONS = 32;
 const MAX_DISPLAY = 64;
@@ -1784,4 +1801,189 @@ fn indexedToRgb(idx: u8) u32 {
         const v: u32 = @as(u32, idx - 232) * 10 + 8;
         return (v << 16) | (v << 8) | v;
     }
+}
+
+// ─── Unit tests ─────────────────────────────────────────────────────
+
+test "allDigits" {
+    const expect = std.testing.expect;
+    try expect(allDigits("0"));
+    try expect(allDigits("123"));
+    try expect(allDigits("9999"));
+    try expect(!allDigits(""));
+    try expect(!allDigits("12a"));
+    try expect(!allDigits("abc"));
+    try expect(!allDigits("1.2"));
+}
+
+test "isVersionString" {
+    const expect = std.testing.expect;
+    try expect(isVersionString("2.1.74"));
+    try expect(isVersionString("1.0"));
+    try expect(isVersionString("0.15.2"));
+    try expect(!isVersionString(""));
+    try expect(!isVersionString("123"));
+    try expect(!isVersionString("abc"));
+    try expect(!isVersionString("1.2.3a"));
+    try expect(isVersionString(".")); // only dots, still matches (no real app does this)
+}
+
+test "isShell" {
+    const expect = std.testing.expect;
+    try expect(isShell("zsh"));
+    try expect(isShell("bash"));
+    try expect(isShell("fish"));
+    try expect(isShell("sh"));
+    try expect(isShell("dash"));
+    try expect(isShell("tcsh"));
+    try expect(isShell("ksh"));
+    try expect(isShell("tmux"));
+    try expect(isShell("login"));
+    try expect(!isShell("nvim"));
+    try expect(!isShell("python3"));
+    try expect(!isShell(""));
+    try expect(!isShell("ZSH"));
+}
+
+test "prettyName" {
+    const expectEql = std.testing.expectEqualStrings;
+    try expectEql("NVim", prettyName("nvim").?);
+    try expectEql("Vim", prettyName("vim").?);
+    try expectEql("Claude Code", prettyName("claude").?);
+    try expectEql("Python", prettyName("python3").?);
+    try expectEql("Python", prettyName("python").?);
+    try expectEql("Node.js", prettyName("node").?);
+    try expectEql("Go", prettyName("go").?);
+    try expectEql("Zig", prettyName("zig").?);
+    try expectEql("PostgreSQL", prettyName("psql").?);
+    try expectEql("Helix", prettyName("hx").?);
+    try std.testing.expect(prettyName("unknown_cmd") == null);
+    try std.testing.expect(prettyName("") == null);
+}
+
+test "matchesDirName" {
+    const expect = std.testing.expect;
+    try expect(matchesDirName("myproject", "myproject"));
+    try expect(matchesDirName("myproject-1", "myproject"));
+    try expect(matchesDirName("myproject-42", "myproject"));
+    try expect(!matchesDirName("myproject-", "myproject"));
+    try expect(!matchesDirName("myproject-abc", "myproject"));
+    try expect(!matchesDirName("other", "myproject"));
+    try expect(!matchesDirName("myproject", ""));
+    try expect(!matchesDirName("", "myproject"));
+}
+
+test "isAutoName bare digits and session-N" {
+    const expect = std.testing.expect;
+    try expect(isAutoName("0"));
+    try expect(isAutoName("1"));
+    try expect(isAutoName("999"));
+    try expect(isAutoName("session-0"));
+    try expect(isAutoName("session-42"));
+    try expect(isAutoName("mterm"));
+    try expect(isAutoName(""));
+    try expect(!isAutoName("session-"));
+    try expect(!isAutoName("my-project"));
+    try expect(!isAutoName("work"));
+}
+
+test "isSshSessionForHost" {
+    const expect = std.testing.expect;
+    try expect(isSshSessionForHost("ssh_myhost/session1", "myhost"));
+    try expect(isSshSessionForHost("ssh_myhost-3", "myhost"));
+    try expect(isSshSessionForHost("ssh_myhost", "myhost"));
+    try expect(!isSshSessionForHost("ssh_other/session", "myhost"));
+    try expect(!isSshSessionForHost("local-session", "myhost"));
+    try expect(!isSshSessionForHost("ssh", "myhost"));
+    try expect(!isSshSessionForHost("", "myhost"));
+    try expect(!isSshSessionForHost("ssh_myhostextra", "myhost"));
+}
+
+test "computeDisplayName user-renamed session" {
+    // A user-renamed session should always show the session name
+    var session = state_mod.Session{
+        .id = "$1",
+        .name = "my-work",
+        .active_command = "zsh",
+        .active_path = "/Users/test/projects",
+    };
+    try std.testing.expectEqualStrings("my-work", computeDisplayName(&session));
+
+    // Version string command → "Claude Code"
+    session.name = "0";
+    session.active_command = "2.1.74";
+    session.active_path = "/Users/test/dev";
+    const display = computeDisplayName(&session);
+    try std.testing.expect(std.mem.indexOf(u8, display, "Claude Code") != null);
+}
+
+test "computeDisplayName shell shows directory" {
+    var session = state_mod.Session{
+        .id = "$2",
+        .name = "0",
+        .active_command = "zsh",
+        .active_path = "/Users/test/myproject",
+    };
+    try std.testing.expectEqualStrings("myproject", computeDisplayName(&session));
+}
+
+test "computeDisplayName notable app" {
+    var session = state_mod.Session{
+        .id = "$3",
+        .name = "0",
+        .active_command = "nvim",
+        .active_path = "/Users/test/myproject",
+    };
+    try std.testing.expectEqualStrings("NVim - myproject", computeDisplayName(&session));
+}
+
+test "computeDisplayName notable app no path" {
+    var session = state_mod.Session{
+        .id = "$4",
+        .name = "0",
+        .active_command = "nvim",
+        .active_path = "",
+    };
+    try std.testing.expectEqualStrings("NVim", computeDisplayName(&session));
+}
+
+test "bridge_get_session_path returns active_path" {
+    const allocator = std.testing.allocator;
+    // Set up g_state with a session that has an active_path
+    g_state = AppState.init(allocator);
+    defer {
+        g_state.?.deinit();
+        g_state = null;
+    }
+    try g_state.?.appendSession(.{
+        .id = try allocator.dupe(u8, "$1"),
+        .name = try allocator.dupe(u8, "test"),
+        .active_path = try allocator.dupe(u8, "/Users/test/projects"),
+    });
+    try g_state.?.appendSession(.{
+        .id = try allocator.dupe(u8, "$2"),
+        .name = try allocator.dupe(u8, "empty"),
+        .active_path = "",
+    });
+
+    // Session with path
+    try std.testing.expectEqual(@as(u16, 20), bridge_get_session_path_len(0));
+    const path = bridge_get_session_path(0);
+    try std.testing.expectEqualStrings("/Users/test/projects", path[0..20]);
+
+    // Session without path
+    try std.testing.expectEqual(@as(u16, 0), bridge_get_session_path_len(1));
+
+    // Out of bounds
+    try std.testing.expectEqual(@as(u16, 0), bridge_get_session_path_len(99));
+}
+
+test "colorToU32 default and rgb" {
+    const Color = screen_mod.Color;
+    try std.testing.expectEqual(@as(u32, 0xFFFFFFFF), colorToU32(.default));
+    // RGB passthrough
+    try std.testing.expectEqual(@as(u32, 0xAABBCC), colorToU32(Color{ .rgb = .{ .r = 0xAA, .g = 0xBB, .b = 0xCC } }));
+    try std.testing.expectEqual(@as(u32, 0x000000), colorToU32(Color{ .rgb = .{ .r = 0, .g = 0, .b = 0 } }));
+    // Indexed 15 = white in our palette
+    try std.testing.expectEqual(@as(u32, 0xFFFFFF), colorToU32(Color{ .indexed = 15 }));
 }

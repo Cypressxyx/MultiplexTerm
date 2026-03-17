@@ -5,6 +5,11 @@ comptime {
     _ = @import("platform/bridge.zig");
 }
 
+// Pull in integration tests
+comptime {
+    _ = @import("integration_tests.zig");
+}
+
 extern fn platform_run() callconv(.c) void;
 
 pub fn main() void {

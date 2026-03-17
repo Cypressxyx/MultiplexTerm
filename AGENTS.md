@@ -171,6 +171,7 @@ sequenceDiagram
 | `src/state.zig` | App state: session list, active session, sidebar visibility |
 | `src/tmux/manager.zig` | Tmux subprocess commands: list/create/kill/rename sessions, list windows/panes, create SSH sessions |
 | `src/ssh.zig` | SSH config parser (`~/.ssh/config`) and remote tmux session discovery via SSH subprocess |
+| `src/integration_tests.zig` | Integration tests: isolated tmux sessions, terminal engine, SSH host persistence |
 | `build.zig` | Build config: compiles Zig + ObjC, links Cocoa framework |
 | `SSH_INTERNALS.md` | Detailed SSH remote session implementation (probe, lifecycle, mouse/command forwarding) |
 | `SIDEBAR.md` | Sidebar layout, hit-testing, hover tracking, text truncation |
@@ -342,8 +343,11 @@ shasum -a 256 /tmp/mTerm.zip   # get the SHA
 ## Testing
 
 ```bash
-# Unit tests
+# Unit + integration tests (34 tests)
 zig build test
+
+# Verbose test output
+zig build test --summary all
 
 # Manual testing checklist
 # - Launch mterm, verify sidebar shows sessions
@@ -371,6 +375,21 @@ zig build test
 # Logs
 cat /tmp/mterm.log
 ```
+
+### Test Architecture
+
+Tests are organized in three layers:
+
+1. **Pure-logic unit tests** (`src/platform/bridge.zig`) — Tests for `allDigits`, `isVersionString`, `isShell`, `prettyName`, `matchesDirName`, `isAutoName`, `isSshSessionForHost`, `computeDisplayName`, `colorToU32`. No external dependencies.
+
+2. **Integration tests** (`src/integration_tests.zig`) — Tests that exercise real tmux instances, terminal engine processing, and file I/O:
+   - **Tmux tests**: Use `TestTmux` helper with isolated tmux socket (`-L`) and `TMUX_TMPDIR` to avoid interfering with user's real tmux. Tests session lifecycle, rename, directory, duplicate detection, shell verification.
+   - **Terminal engine tests**: Test VT100 text processing, cursor movement, SGR attributes, alt screen switching, erase display, scroll regions, line wrapping.
+   - **SSH host persistence tests**: File round-trip for `~/.mterm/ssh_hosts` format.
+
+3. **Existing module tests** — Tests in `ssh.zig`, `state.zig`, `main.zig` for SSH probe parsing, state init, child process patterns.
+
+Key: `TestTmux` provides complete tmux isolation per test via unique `-L` socket names and `TMUX_TMPDIR`, so tests never interfere with each other or the user's real tmux.
 
 ## Common Pitfalls
 

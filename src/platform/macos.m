@@ -25,6 +25,8 @@ extern uint32_t bridge_get_cell_count(void);
 extern uint16_t bridge_get_session_count(void);
 extern const uint8_t* bridge_get_session_name(uint16_t idx);
 extern uint16_t bridge_get_session_name_len(uint16_t idx);
+extern const uint8_t* bridge_get_session_path(uint16_t idx);
+extern uint16_t bridge_get_session_path_len(uint16_t idx);
 extern uint8_t bridge_is_session_selected(uint16_t idx);
 extern uint8_t bridge_is_session_attached(uint16_t idx);
 extern uint8_t bridge_is_running(void);
@@ -179,7 +181,7 @@ static void applyTheme(int idx) {
     g_defaultFg  = hexColor(t->fg);
 }
 
-static void initTheme(void) {
+void initTheme(void) {
     applyTheme(0); // Default: Vercel Dark
 }
 
@@ -2059,6 +2061,15 @@ static NSString* const kPaletteHints[] = {
     renameItem.target = self;
     [menu addItem:renameItem];
 
+    uint16_t pathLen = bridge_get_session_path_len(idx);
+    if (pathLen > 0) {
+        NSMenuItem* finderItem = [[NSMenuItem alloc] initWithTitle:@"Open in Finder"
+            action:@selector(contextOpenInFinder:) keyEquivalent:@""];
+        finderItem.tag = idx;
+        finderItem.target = self;
+        [menu addItem:finderItem];
+    }
+
     [menu addItem:[NSMenuItem separatorItem]];
 
     NSMenuItem* deleteItem = [[NSMenuItem alloc] initWithTitle:@"Delete"
@@ -2076,6 +2087,17 @@ static NSString* const kPaletteHints[] = {
 
 - (void)contextDelete:(NSMenuItem*)item {
     bridge_kill_session((uint16_t)item.tag);
+}
+
+- (void)contextOpenInFinder:(NSMenuItem*)item {
+    uint16_t idx = (uint16_t)item.tag;
+    uint16_t pathLen = bridge_get_session_path_len(idx);
+    if (pathLen == 0) return;
+    const uint8_t* pathPtr = bridge_get_session_path(idx);
+    NSString* path = [[NSString alloc] initWithBytes:pathPtr length:pathLen encoding:NSUTF8StringEncoding];
+    if (path) {
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:path isDirectory:YES]];
+    }
 }
 
 - (void)promptRenameSession:(uint16_t)idx {

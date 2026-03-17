@@ -56,6 +56,32 @@ pub fn build(b: *std.Build) void {
     const lint_step = b.step("lint", "Run zlint linter");
     lint_step.dependOn(&lint_cmd.step);
 
+    // E2E test: compiles bridge + macos.m + e2e_test.m into a test binary
+    const e2e_mod = b.createModule(.{
+        .root_source_file = b.path("src/e2e_entry.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    e2e_mod.addCSourceFile(.{
+        .file = b.path("src/platform/macos.m"),
+        .flags = &.{"-fobjc-arc"},
+    });
+    e2e_mod.addCSourceFile(.{
+        .file = b.path("tests/e2e_test.m"),
+        .flags = &.{"-fobjc-arc"},
+    });
+    e2e_mod.linkFramework("Cocoa", .{});
+
+    const e2e_exe = b.addExecutable(.{
+        .name = "mterm-e2e",
+        .root_module = e2e_mod,
+    });
+
+    const run_e2e = b.addRunArtifact(e2e_exe);
+    const e2e_step = b.step("e2e-test", "Run E2E integration tests (requires GUI session)");
+    e2e_step.dependOn(&run_e2e.step);
+
     // Install .app bundle to /Applications
     const app_step = b.step("install-app", "Install mTerm.app to /Applications");
     const install_app = b.addSystemCommand(&.{
@@ -78,9 +104,9 @@ pub fn build(b: *std.Build) void {
         \\  <key>CFBundleIdentifier</key>
         \\  <string>com.multiplexterm.mterm</string>
         \\  <key>CFBundleVersion</key>
-        \\  <string>1.5.1</string>
+        \\  <string>1.6.0</string>
         \\  <key>CFBundleShortVersionString</key>
-        \\  <string>1.5.1</string>
+        \\  <string>1.6.0</string>
         \\  <key>CFBundleExecutable</key>
         \\  <string>mterm</string>
         \\  <key>CFBundleIconFile</key>
